@@ -63,6 +63,10 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
       COMPANY_NAME: Brackenrow
+      PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
+      VULTR_INFERENCE_KEY: ${VULTR_INFERENCE_KEY:-}
+      VULTR_MODEL: ${VULTR_MODEL:-}
+      VULTR_MAX_CALLS: ${VULTR_MAX_CALLS:-1000}
       SLACK_CONCIERGE_BOT_TOKEN: ${SLACK_CONCIERGE_BOT_TOKEN:-}
       SLACK_DEMO_CHANNEL_ID: ${SLACK_DEMO_CHANNEL_ID:-}
     depends_on:
@@ -84,7 +88,7 @@ services:
       SANDBOX_MODE: ${SANDBOX_MODE:-local}
       VULTR_INFERENCE_KEY: ${VULTR_INFERENCE_KEY:-}
       VULTR_MODEL: ${VULTR_MODEL:-}
-      VULTR_MAX_CALLS: ${VULTR_MAX_CALLS:-30}
+      VULTR_MAX_CALLS: ${VULTR_MAX_CALLS:-1000}
       DOCKER_HOST: ${DOCKER_HOST:-}
       SANDBOX_IMAGE: ${SANDBOX_IMAGE:-office-ops-sandbox:latest}
       SANDBOX_NETWORK: ${SANDBOX_NETWORK:-shopnet}

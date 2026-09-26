@@ -22,13 +22,11 @@ import crew.slack_bot as bot
 
 seed_demo(reset=True)
 queued = []
-bot._submit_run = lambda flow, *, source_user, channel_id: queued.append(
-    (flow, source_user, channel_id)) or 'run-123'
+bot._submit_run = lambda flow, *, source_user, channel_id, request_text=None: queued.append(
+    (flow, source_user, channel_id, request_text)) or 'run-123'
 assert bot.is_slack_allowed('U_ALLOWED')
 assert bot.is_slack_allowed('U_ADMIN')
 assert not bot.is_slack_allowed('U_OTHER')
-assert bot.mention_intent('We need oat milk') == 'berlin-pantry'
-assert bot.mention_intent('A new hire starts') == 'welcome-kit'
 assert 'configured demo channel' in bot.handle_command(
     {'user_id': 'U_ALLOWED', 'channel_id': 'C_OTHER', 'text': 'pantry', 'trigger_id': 't0'})
 assert 'not allowed' in bot.handle_command(
@@ -42,9 +40,13 @@ command = {'user_id': 'U_ALLOWED', 'channel_id': 'C_DEMO',
            'text': 'pantry', 'trigger_id': 't1'}
 first = bot.handle_command(command)
 assert 'run-123' in first, first
-assert queued == [('berlin-pantry', 'U_ALLOWED', 'C_DEMO')]
+assert queued == [('berlin-pantry', 'U_ALLOWED', 'C_DEMO', None)]
 assert 'already received' in bot.handle_command(command)
 assert len(queued) == 1
+natural = bot.handle_command({'user_id': 'U_ALLOWED', 'channel_id': 'C_DEMO',
+                              'text': 'order 3 oat milks for Berlin', 'trigger_id': 't2'})
+assert 'run-123' in natural
+assert queued[-1] == ('natural-language', 'U_ALLOWED', 'C_DEMO', '3 oat milks for Berlin')
 assert 'EUR remaining' in bot.handle_command(
     {'user_id': 'U_ALLOWED', 'channel_id': 'C_DEMO', 'text': 'budgets'})
 assert 'frozen' in bot.handle_command(

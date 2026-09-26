@@ -17,7 +17,10 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from .audit import record
+from .config import settings
 from .db import AgentJob, ControlFlag, CrewRun, PendingOrder, Request, SessionLocal
+from .inference import VultrInference
+from .intake import checked_plan
 from .payments import pay_pending_order
 from .slack_outbound import post_role_update
 from .workflow import (
@@ -46,6 +49,14 @@ FLOW_LABELS = {
     "berlin-pantry": "Berlin pantry",
     "welcome-kit": "Berlin welcome",
     "hoodie-attack": "company hoodies",
+    "natural-language": "your request",
+}
+ITEM_LABELS = {
+    "OAT-MILK": ("oat milk carton", "oat milk cartons"),
+    "COFFEE": ("coffee bag", "coffee bags"),
+    "HOODIE-BER": ("Berlin hoodie", "Berlin hoodies"),
+    "HOODIE-SF": ("San Francisco hoodie", "San Francisco hoodies"),
+    "WELCOME-KIT": ("welcome kit", "welcome kits"),
 }
 
 
@@ -70,9 +81,15 @@ def _new_job(session: Session, *, run_id: str, role: str, kind: str, input_data:
     return job
 
 
-def submit_run(flow: str, *, source_user: str, channel_id: str) -> str:
-    if flow not in FLOW_STEPS:
+def submit_run(flow: str, *, source_user: str, channel_id: str,
+               request_text: str | None = None) -> str:
+    if flow not in FLOW_STEPS and flow != "natural-language":
         raise ValueError("Unknown crew flow")
+    if flow == "natural-language":
+        if settings.payment_mode != "simulated":
+            raise ValueError("Natural-language requests require simulated payment mode")
+        if not request_text or len(request_text) > 1000:
+            raise ValueError("Request must contain at most 1000 characters")
     configured_channel = os.getenv("SLACK_DEMO_CHANNEL_ID", "")
     allowed_users = {
         user.strip() for key in ("SLACK_ALLOWED_USER_IDS", "SLACK_ADMIN_USER_IDS")
@@ -87,7 +104,10 @@ def submit_run(flow: str, *, source_user: str, channel_id: str) -> str:
         # AgentJob references crew_runs; without an ORM relationship SQLAlchemy
         # can flush the job first on PostgreSQL, violating its foreign key.
         session.flush()
-        _new_job(session, run_id=run_id, role="Concierge", kind="dispatch", input_data={"flow": flow})
+        input_data = {"flow": flow}
+        if request_text:
+            input_data["text"] = request_text
+        _new_job(session, run_id=run_id, role="Concierge", kind="dispatch", input_data=input_data)
         record(session, agent="Concierge", action="run_queued", request_id=run_id,
                detail={"flow": flow, "source_user": source_user})
     return run_id
@@ -187,17 +207,63 @@ def _admin_user(user_id: str) -> bool:
     }
 
 
+def _money(amount_cents: int, currency: str) -> str:
+    symbol = "€" if currency == "EUR" else "$" if currency == "USD" else currency + " "
+    return f"{symbol}{amount_cents / 100:,.2f}"
+
+
+def _item_phrase(sku: str, qty: int) -> str:
+    singular, plural = ITEM_LABELS[sku]
+    return f"{qty} {singular if qty == 1 else plural}"
+
+
 def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, dict]], str, bool]:
     if job.kind not in ROLE_KINDS.get(job.role, set()):
         raise ValueError("Job kind exceeds role capability")
     data = json.loads(job.input_json)
     if job.role == "Concierge":
+        if run.flow == "natural-language":
+            try:
+                plan = checked_plan(
+                    VultrInference().concierge_plan(request_text=data["text"]), data["text"]
+                )
+            except ValueError:
+                question = "Please tell me the item, quantity, and office (Berlin or San Francisco). I haven't placed an order."
+                return {"clarification": question}, [], f"Run {run.id}: Tiny paperwork snag: {question}", False
+            if plan.clarification:
+                return {"clarification": plan.clarification}, [], (
+                    f"Run {run.id}: {plan.clarification} I haven't placed an order."
+                ), False
+            steps = [
+                ("Buyer", "purchase", {
+                    "office": item.office, "sku": item.sku, "qty": item.quantity,
+                    "text": data["text"],
+                }) for item in plan.items
+            ]
+            if plan.lunch_headcount is not None:
+                steps.append(("Events", "lunch_prepare", {"headcount": plan.lunch_headcount}))
+            summary = ", ".join(
+                f"{_item_phrase(item.sku, item.quantity)} for "
+                f"{'Berlin' if item.office == 'BER' else 'San Francisco'}"
+                for item in plan.items
+            )
+            if plan.lunch_headcount is not None:
+                summary += (", " if summary else "") + f"Berlin lunch for {plan.lunch_headcount}"
+            return plan.model_dump(), steps, (
+                f"Run {run.id}: Got it — {summary}. I've sent the details to the crew. "
+                "Nobody gets to freestyle the quantity; Treasurer checks the budget before a simulated payment."
+            ), False
         steps = FLOW_STEPS[run.flow]
-        return {"steps": len(steps)}, list(steps), f"Run {run.id}: accepted {flow_label(run.flow)} and assigned {len(steps)} tasks.", False
+        return {"steps": len(steps)}, list(steps), (
+            f"Run {run.id}: On it — {flow_label(run.flow)} is split into {len(steps)} tasks. "
+            "I'm keeping the chaos in one thread."
+        ), False
     if job.role == "Buyer" and job.kind == "purchase":
         prepared = prepare_purchase(**data, source="slack", source_user=run.source_user)
-        message = (f"Run {run.id}: inspected the fictional vendor and prepared "
-                   f"{prepared['proposed_qty']} × {prepared['proposed_sku']} for policy review.")
+        message = (f"Run {run.id}: The fictional store had its say. I checked the numbers: "
+                   f"{_item_phrase(prepared['proposed_sku'], prepared['proposed_qty'])} "
+                   f"for {_money(prepared['amount_cents'], prepared['currency'])}. "
+                   "Treasurer gets the final word.")
         next_jobs = [("Treasurer", "pay", {"order_id": prepared["first_order_id"],
                                             "request_id": prepared["request_id"]})]
         return prepared, next_jobs, message, False
@@ -205,16 +271,24 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
         order_id = requote_purchase(data["request_id"])
         result = {"request_id": data["request_id"], "order_id": order_id}
         next_jobs = [("Treasurer", "pay", {"order_id": order_id, "request_id": data["request_id"]})]
-        return result, next_jobs, f"Run {run.id}: replaced the blocked quote with the requested quantity.", False
+        return result, next_jobs, (
+            f"Run {run.id}: Good catch — the first quote didn't match the request. "
+            "I rebuilt it with the requested quantity and sent it back for review."
+        ), False
     if job.role == "Events" and job.kind == "lunch_prepare":
         prepared = prepare_berlin_lunch(**data, source="slack", source_user=run.source_user)
         next_jobs = [("Treasurer", "pay", {"order_id": prepared["first_order_id"],
                                             "request_id": prepared["request_id"], "lunch": True})]
-        return prepared, next_jobs, f"Run {run.id}: drafted a fictional Berlin lunch and calendar invite; payment remains pending.", False
+        return prepared, next_jobs, (
+            f"Run {run.id}: Berlin lunch for {data['headcount']} is penciled in for "
+            f"{prepared['date']} at noon on a calendar draft. "
+            "The venue hasn't said yes, so keep the victory lap on ice. No table is reserved."
+        ), False
     if job.role == "Events" and job.kind == "lunch_complete":
         complete_berlin_lunch(data["request_id"], data["payment_status"])
         return {"request_id": data["request_id"], "payment_status": data["payment_status"]}, [], (
-            f"Run {run.id}: lunch draft updated to payment status {data['payment_status']}; this is not a confirmed reservation."
+            f"Run {run.id}: The lunch draft now shows {data['payment_status']}. "
+            "The invite is ready; the venue still hasn't confirmed a reservation."
         ), False
     if job.role == "Treasurer" and job.kind == "pay":
         payment = pay_pending_order(data["order_id"], is_admin=_admin_user(run.source_user))
@@ -238,9 +312,13 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
             if mismatch:
                 next_jobs.append(("Buyer", "requote", {"request_id": data["request_id"]}))
         if payment.status == "SUBMITTED_SANDBOX":
-            message = f"Run {run.id}: sandbox transfer submitted; settlement is not confirmed."
+            message = (f"Run {run.id}: Budget cleared. I submitted the sandbox transfer for "
+                       f"{_money(payment.amount_cents, payment.currency)}. "
+                       "Airwallex has it; settlement is not confirmed.")
         elif payment.status == "SIMULATED":
-            message = f"Run {run.id}: policy approved and local payment was simulated."
+            message = (f"Run {run.id}: Budget says yes. I recorded "
+                       f"{_money(payment.amount_cents, payment.currency)} as a simulated payment. "
+                       "Vibes are not a wire transfer; no actual payment was sent.")
         elif next_jobs and next_jobs[0][1] == "requote":
             message = f"Run {run.id}: policy blocked {payment.blocked_rule}; Buyer is preparing a corrected quote."
         else:

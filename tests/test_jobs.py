@@ -143,3 +143,79 @@ assert jobs.claim_next_job('Treasurer') is None
 run = jobs.get_run(run_id)
 assert [j['status'] for j in run['jobs'] if j['role'] == 'Treasurer'].count('RUNNING') == 1
 """)
+
+
+def test_plain_english_order_uses_stated_quantities(tmp_path):
+    _run_script(tmp_path, "queue-natural.db", """
+from sqlalchemy import select
+from crew.db import Payment, Request, SessionLocal
+from crew.inference import ConciergePlan, OrderLine
+from crew.seed import seed_demo
+import crew.jobs as jobs
+
+seed_demo(reset=True)
+messages = []
+jobs._notify = lambda run_id, role, message: messages.append((role, message))
+class FakeInference:
+    def concierge_plan(self, *, request_text):
+        assert request_text == 'Please order 3 oat milk cartons and 2 coffee bags for Berlin.'
+        return ConciergePlan(items=[
+            OrderLine(sku='OAT-MILK', quantity=3, office='BER'),
+            OrderLine(sku='COFFEE', quantity=2, office='BER'),
+        ])
+jobs.VultrInference = FakeInference
+run_id = jobs.submit_run('natural-language', source_user='U_TEST', channel_id='C_DEMO',
+                         request_text='Please order 3 oat milk cartons and 2 coffee bags for Berlin.')
+for _ in range(20):
+    if not any(jobs.run_one_job(role) for role in ('Concierge', 'Buyer', 'Treasurer')):
+        break
+assert jobs.get_run(run_id)['status'] == 'COMPLETE'
+with SessionLocal() as session:
+    requests = session.execute(select(Request).where(Request.source == 'slack')).scalars().all()
+    assert sorted((r.sku, r.requested_qty) for r in requests) == [('COFFEE', 2), ('OAT-MILK', 3)]
+    payments = session.execute(select(Payment)).scalars().all()
+    assert [p.status for p in payments] == ['SIMULATED', 'SIMULATED']
+assert any('3 oat milk cartons' in message for role, message in messages if role == 'Concierge')
+assert any('simulated payment' in message for role, message in messages if role == 'Treasurer')
+""")
+
+
+def test_plain_english_plan_cannot_invent_quantity(tmp_path):
+    _run_script(tmp_path, "queue-natural-rejected.db", """
+from sqlalchemy import select
+from crew.db import Payment, SessionLocal
+from crew.inference import ConciergePlan, OrderLine
+from crew.seed import seed_demo
+import crew.jobs as jobs
+
+seed_demo(reset=True)
+messages = []
+jobs._notify = lambda run_id, role, message: messages.append(message)
+class FakeInference:
+    def concierge_plan(self, *, request_text):
+        return ConciergePlan(items=[OrderLine(sku='HOODIE-BER', quantity=500, office='BER')])
+jobs.VultrInference = FakeInference
+run_id = jobs.submit_run('natural-language', source_user='U_TEST', channel_id='C_DEMO',
+                         request_text='Please order 20 hoodies for Berlin.')
+assert jobs.run_one_job('Concierge')
+assert jobs.get_run(run_id)['status'] == 'COMPLETE'
+assert not jobs.run_one_job('Buyer')
+with SessionLocal() as session:
+    assert session.execute(select(Payment)).scalars().all() == []
+assert any("haven't placed an order" in message for message in messages)
+""")
+
+
+def test_plain_english_cannot_submit_provider_payments(tmp_path):
+    _run_script(tmp_path, "queue-no-provider.db", """
+from types import SimpleNamespace
+import crew.jobs as jobs
+
+jobs.settings = SimpleNamespace(payment_mode="airwallex_sandbox")
+try:
+    jobs.submit_run("natural-language", source_user="U_TEST", channel_id="C_DEMO",
+                    request_text="Order 3 oat milk cartons for Berlin")
+    assert False, "English requests must not create provider payouts"
+except ValueError as exc:
+    assert "simulated payment mode" in str(exc)
+""")

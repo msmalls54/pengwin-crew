@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from uuid import UUID
 
 from sqlalchemy import select
@@ -15,7 +16,10 @@ from .audit import record
 from .config import settings
 from .db import Budget, ControlFlag, SessionLocal
 from .seed import seed_demo
-HELP = "Use `/crew pantry`, `/crew welcome`, `/crew hoodies`, `/crew run <id>`, `/crew status`, or `/crew budgets`. Admins can also use `freeze`, `unfreeze`, and `reset-demo`."
+HELP = ("Mention Concierge with a plain-English request, such as 'please order 3 oat milk cartons "
+        "and 2 coffee bags for Berlin,' or use `/crew order ...`. Include quantities and the office. "
+        "The demo shortcuts are `/crew pantry`, `/crew welcome`, and `/crew hoodies`. "
+        "Use `/crew run <id>`, `/crew status`, or `/crew budgets` to check progress.")
 FLOW_COMMANDS = {"pantry": "berlin-pantry", "welcome": "welcome-kit", "hoodies": "hoodie-attack"}
 
 
@@ -32,26 +36,19 @@ def is_slack_allowed(user_id: str) -> bool:
     return bool(user_id) and (is_slack_admin(user_id) or user_id in _ids("SLACK_ALLOWED_USER_IDS"))
 
 
-def mention_intent(text: str) -> str | None:
-    lowered = text.lower()
-    if "hoodie" in lowered:
-        return "hoodie-attack"
-    if "new hire" in lowered or "welcome" in lowered:
-        return "welcome-kit"
-    if "oat milk" in lowered or "coffee" in lowered or "pantry" in lowered:
-        return "berlin-pantry"
-    return None
-
-
 def is_demo_channel(channel_id: str) -> bool:
     configured = os.getenv("SLACK_DEMO_CHANNEL_ID", "")
     return bool(configured) and channel_id == configured
 
 
-def _submit_run(flow: str, *, source_user: str, channel_id: str) -> str:
+def _submit_run(flow: str, *, source_user: str, channel_id: str,
+                request_text: str | None = None) -> str:
     from .jobs import submit_run
 
-    return submit_run(flow, source_user=source_user, channel_id=channel_id)
+    if request_text is None:
+        return submit_run(flow, source_user=source_user, channel_id=channel_id)
+    return submit_run(flow, source_user=source_user, channel_id=channel_id,
+                      request_text=request_text)
 
 
 def claim_delivery(delivery_id: str) -> bool:
@@ -68,17 +65,22 @@ def claim_delivery(delivery_id: str) -> bool:
         return False
 
 
-def queue_allowed_flow(flow: str, *, user_id: str, channel_id: str, delivery_id: str) -> str:
+def queue_allowed_flow(flow: str, *, user_id: str, channel_id: str,
+                       delivery_id: str, request_text: str | None = None) -> str:
     if not is_slack_allowed(user_id):
         return "This Slack user is not allowed to run crew requests."
     if not is_demo_channel(channel_id):
         return "Crew requests are accepted only in the configured demo channel."
+    if flow == "natural-language" and (not request_text or len(request_text) > 1000):
+        return "Please include a request of at most 1,000 characters."
     if not claim_delivery(delivery_id):
         return "This Slack request was already received, or has no delivery ID. Send a new request if needed."
     try:
-        run_id = _submit_run(flow, source_user=user_id, channel_id=channel_id)
+        run_id = _submit_run(flow, source_user=user_id, channel_id=channel_id,
+                             request_text=request_text)
         from .jobs import flow_label
-        return f"Concierge accepted {flow_label(flow)}. Run {run_id} is queued; the crew will report in this channel."
+        return (f"On it — I've queued {flow_label(flow)} as run {run_id}. "
+                "I'll bring the crew into this channel as the work moves along.")
     except Exception:
         # Preserve the claim: a retry must not create a second purchase-capable job.
         with SessionLocal.begin() as session:
@@ -135,7 +137,8 @@ def run_status_text(run_id: str, *, user_id: str) -> str:
 def handle_command(command: dict) -> str:
     user_id = command.get("user_id", "")
     channel_id = command.get("channel_id", "")
-    action = command.get("text", "").strip().lower()
+    raw = command.get("text", "").strip()
+    action = raw.lower()
     if not is_demo_channel(channel_id):
         return "Use this crew app in its configured demo channel."
     if action in FLOW_COMMANDS:
@@ -165,7 +168,12 @@ def handle_command(command: dict) -> str:
                    detail={"frozen": frozen, "source": "slack", "user_id": user_id},
                    severity="warning" if frozen else "info")
         return f"Payments are now {'frozen' if frozen else 'unfrozen'}."
-    return HELP
+    if action in ("", "help"):
+        return HELP
+    request_text = raw[6:].strip() if action.startswith("order ") else raw
+    return queue_allowed_flow("natural-language", user_id=user_id, channel_id=channel_id,
+                              delivery_id=("command:" + command["trigger_id"]) if command.get("trigger_id") else "",
+                              request_text=request_text)
 
 
 def build_app() -> App:
@@ -191,12 +199,14 @@ def build_app() -> App:
         if not is_slack_allowed(user_id):
             say("This Slack user is not allowed to run crew requests.")
             return
-        flow = mention_intent(event.get("text", ""))
-        if flow is None:
+        text = re.sub(r"<@[^>]+>", "", event.get("text", "")).strip()
+        if not text:
             say(HELP)
             return
+        flow = FLOW_COMMANDS.get(text.lower(), "natural-language")
         say(queue_allowed_flow(flow, user_id=user_id, channel_id=channel_id,
-                               delivery_id=("event:" + body["event_id"]) if body.get("event_id") else ""))
+                               delivery_id=("event:" + body["event_id"]) if body.get("event_id") else "",
+                               request_text=text if flow == "natural-language" else None))
 
     @bot.command("/crew")
     def command(ack, respond, command):

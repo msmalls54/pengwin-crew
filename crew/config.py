@@ -19,7 +19,7 @@ class Settings:
     freeze: bool = os.getenv("FREEZE", "false").lower() == "true"
     vultr_key: str = os.getenv("VULTR_INFERENCE_KEY", "")
     vultr_model: str = os.getenv("VULTR_MODEL", "")
-    vultr_max_calls: int = int(os.getenv("VULTR_MAX_CALLS", "30"))
+    vultr_max_calls: int = int(os.getenv("VULTR_MAX_CALLS", "1000"))
     airwallex_client_id: str = os.getenv("AIRWALLEX_CLIENT_ID", "")
     airwallex_api_key: str = os.getenv("AIRWALLEX_API_KEY", "")
     airwallex_base: str = os.getenv("AIRWALLEX_SANDBOX_BASE", "https://api.sandbox.airwallex.com")

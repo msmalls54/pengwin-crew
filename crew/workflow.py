@@ -87,6 +87,8 @@ def prepare_purchase(*, office: str, sku: str, qty: int, source: str = "web", so
     return {"request_id": request_id, "first_order_id": first_order.id,
             "requested_sku": sku, "requested_qty": qty,
             "proposed_sku": choice.sku, "proposed_qty": choice.quantity,
+            "product_name": PRODUCTS[choice.sku].name,
+            "amount_cents": first_order.amount_cents, "currency": first_order.currency,
             "planner_mode": settings.planner_mode,
             "model": settings.vultr_model if settings.planner_mode == "vultr" else None,
             "sandbox_mode": settings.sandbox_mode, "payment_mode": settings.payment_mode}
@@ -169,7 +171,8 @@ def prepare_berlin_lunch(*, headcount: int = 8, source: str = "web", source_user
                        "date": lunch_day.isoformat(), "payment_status": "PENDING"})
     return {"request_id": request_id, "first_order_id": order.id,
             "planner_mode": "deterministic-events", "sandbox_mode": settings.sandbox_mode,
-            "payment_mode": settings.payment_mode, "invite_ready": True}
+            "payment_mode": settings.payment_mode, "invite_ready": True,
+            "date": lunch_day.isoformat()}
 
 
 def complete_berlin_lunch(request_id: str, payment_status: str) -> None:
