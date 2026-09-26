@@ -11,8 +11,10 @@ def seed_demo(*, reset: bool = False) -> None:
     init_db()
     with SessionLocal.begin() as session:
         if reset:
-            for model in (Payment, PendingOrder, Task, Request, AuditEvent, Budget, Vendor, Office, ControlFlag):
+            for model in (Payment, PendingOrder, Task, Request, AuditEvent, Budget, Vendor, Office):
                 session.execute(delete(model))
+            # Demo resets must not refresh the paid-inference allowance.
+            session.execute(delete(ControlFlag).where(ControlFlag.key != "vultr_calls"))
         if session.get(Office, "SF") is None:
             session.add_all([
                 Office(id="SF", name="San Francisco", currency="USD"),

@@ -33,6 +33,7 @@ services:
     networks: [control]
 
   slack:
+    profiles: ["slack"]
     build:
       context: .
       dockerfile: Dockerfile.control

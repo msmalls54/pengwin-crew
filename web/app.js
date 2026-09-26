@@ -12,7 +12,7 @@ function node(tag, className, text) {
 
 function render(state) {
   latestState = state;
-  $('mode').textContent = `${state.modes.planner} planner · ${state.modes.sandbox} sandbox · ${state.modes.payment} payment${state.freeze ? ' · FROZEN' : ''}`;
+  $('mode').textContent = `${state.modes.model || state.modes.planner} planner · ${state.modes.sandbox} sandbox · ${state.modes.payment} payment${state.freeze ? ' · FROZEN' : ''}`;
   $('freeze').textContent = state.freeze ? 'Unfreeze payments' : 'Freeze payments';
   $('timeline').replaceChildren(...state.events.map(event => {
     const box = node('div', `event ${event.severity}`);

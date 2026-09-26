@@ -69,28 +69,34 @@ def run_purchase(*, office: str, sku: str, qty: int, source: str = "web", source
                              reason="Local attack simulation" if attack_qty != qty else "Requested quantity")
     else:
         raise RuntimeError("Unknown planner mode")
-    if choice.sku != sku or choice.quantity < 1 or choice.quantity > 1000:
-        raise ValueError("Buyer returned an invalid SKU or quantity")
+    if choice.sku not in PRODUCTS:
+        with SessionLocal.begin() as session:
+            record(session, agent="Buyer", action="selection_rejected", request_id=request_id,
+                   detail={"reason": "UNKNOWN_SKU", "proposed_sku": choice.sku}, severity="error")
+        raise ValueError("Buyer returned an unknown SKU")
     with SessionLocal.begin() as session:
         _task(session, request_id, agent="Buyer", kind="select",
               input_data={"sku": sku, "qty": qty, "page_text": page_text[:2000]},
               output_data=choice.model_dump())
         record(session, agent="Buyer", action="selection_proposed", request_id=request_id,
                detail={"sku": choice.sku, "qty": choice.quantity,
-                       "planner_mode": settings.planner_mode})
+                       "planner_mode": settings.planner_mode,
+                       "model": settings.vultr_model if settings.planner_mode == "vultr" else None})
 
-    first_order = _pending_order(request_id=request_id, sku=sku, qty=choice.quantity, browser=browser)
+    first_order = _pending_order(request_id=request_id, sku=choice.sku, qty=choice.quantity, browser=browser)
     first_payment = pay_pending_order(first_order.id, is_admin=is_admin)
     result = {"request_id": request_id, "first_order_id": first_order.id,
               "first_payment_id": first_payment.id, "first_status": first_payment.status,
               "blocked_rule": first_payment.blocked_rule, "planner_mode": settings.planner_mode,
+              "model": settings.vultr_model if settings.planner_mode == "vultr" else None,
               "sandbox_mode": settings.sandbox_mode, "payment_mode": settings.payment_mode}
-    if first_payment.blocked_rule == "QUANTITY_SANITY" and choice.quantity != qty:
+    if first_payment.blocked_rule in {"QUANTITY_SANITY", "SKU_MISMATCH", "VENDOR_ALLOWLIST"} and (choice.sku != sku or choice.quantity != qty):
         corrected = _pending_order(request_id=request_id, sku=sku, qty=qty, browser=browser)
         corrected_payment = pay_pending_order(corrected.id, is_admin=is_admin)
         with SessionLocal.begin() as session:
             record(session, agent="Buyer", action="requote_after_block", request_id=request_id,
-                   detail={"original_qty": choice.quantity, "corrected_qty": qty,
+                   detail={"original_sku": choice.sku, "corrected_sku": sku,
+                           "original_qty": choice.quantity, "corrected_qty": qty,
                            "new_order_id": corrected.id})
         result.update({"corrected_order_id": corrected.id,
                        "corrected_payment_id": corrected_payment.id,

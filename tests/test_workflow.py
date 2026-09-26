@@ -63,3 +63,23 @@ with TestClient(app) as client:
 """
     result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
+
+
+def test_sandbox_payment_without_credentials_blocks_cleanly(tmp_path):
+    import subprocess
+    import sys
+    env = os.environ.copy()
+    env.update({"DATABASE_URL": f"sqlite:///{tmp_path / 'missing-provider.db'}",
+                "PAYMENT_MODE": "airwallex_sandbox", "PLANNER_MODE": "deterministic",
+                "SANDBOX_MODE": "local", "AW_BENEFICIARY_KAFFEE": "fictional-sandbox-beneficiary",
+                "AIRWALLEX_CLIENT_ID": "", "AIRWALLEX_API_KEY": ""})
+    script = """
+from crew.seed import seed_demo
+from crew.workflow import run_flow
+seed_demo(reset=True)
+result=run_flow('berlin-pantry')[0]
+assert result['first_status']=='BLOCKED', result
+assert result['blocked_rule']=='PROVIDER_UNAVAILABLE', result
+"""
+    result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr

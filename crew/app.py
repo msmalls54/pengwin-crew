@@ -56,6 +56,7 @@ def index():
 @app.get("/health")
 def health():
     return {"status": "ok", "planner_mode": settings.planner_mode,
+            "model": settings.vultr_model if settings.planner_mode == "vultr" else None,
             "sandbox_mode": settings.sandbox_mode, "payment_mode": settings.payment_mode}
 
 
@@ -69,7 +70,8 @@ def state():
         return {
             "company": settings.company_name,
             "modes": {"planner": settings.planner_mode, "sandbox": settings.sandbox_mode,
-                      "payment": settings.payment_mode},
+                      "payment": settings.payment_mode,
+                      "model": settings.vultr_model if settings.planner_mode == "vultr" else None},
             "freeze": bool(freeze and freeze.value == "true") or settings.freeze,
             "budgets": [{"office": b.office_id, "category": b.category, "limit_cents": b.limit_cents,
                          "spent_cents": b.spent_cents, "reserved_cents": b.reserved_cents,

@@ -107,7 +107,6 @@ def provider():
 
 def pay_pending_order(order_id: str, *, is_admin: bool = False) -> Payment:
     """Reserve budget before a provider call; never retry an uncertain transfer with a new ID."""
-    pay_provider = provider()
     with SessionLocal.begin() as session:
         order = session.execute(select(PendingOrder).where(PendingOrder.id == order_id).with_for_update()).scalar_one()
         request = session.get(Request, order.request_id)
@@ -140,13 +139,14 @@ def pay_pending_order(order_id: str, *, is_admin: bool = False) -> Payment:
                    detail={"rule": "BENEFICIARY_MISSING"}, severity="error")
             return payment
         try:
+            pay_provider = provider()
             balance_cents = pay_provider.balance_cents(order.currency)
         except ProviderError as exc:
             payment.status = "BLOCKED"
-            payment.blocked_rule = "BALANCE_UNVERIFIED"
+            payment.blocked_rule = "PROVIDER_UNAVAILABLE" if exc.definitive else "BALANCE_UNVERIFIED"
             payment.provider_error = str(exc)
             record(session, agent="Policy", action="payment_blocked", request_id=request.id,
-                   detail={"rule": "BALANCE_UNVERIFIED"}, severity="error")
+                   detail={"rule": payment.blocked_rule}, severity="error")
             return payment
         if balance_cents < order.amount_cents:
             payment.status = "BLOCKED"
@@ -187,8 +187,11 @@ def pay_pending_order(order_id: str, *, is_admin: bool = False) -> Payment:
         request = session.get(Request, request_id)
         budget = session.execute(select(Budget).where(Budget.office_id == request.office_id, Budget.category == request.category).with_for_update()).scalar_one()
         payment.provider_ref = provider_ref
-        payment.status = "SIMULATED" if settings.payment_mode == "simulated" else "SUBMITTED_SANDBOX"
-        if settings.payment_mode == "simulated":
+        failed = settings.payment_mode != "simulated" and provider_status.upper() in {"FAILED", "CANCELLED", "APPROVAL_REJECTED"}
+        payment.status = "SIMULATED" if settings.payment_mode == "simulated" else ("PROVIDER_REJECTED" if failed else "SUBMITTED_SANDBOX")
+        if failed:
+            budget.reserved_cents -= amount_cents
+        elif settings.payment_mode == "simulated":
             budget.reserved_cents -= amount_cents
             budget.spent_cents += amount_cents
         order.status = payment.status

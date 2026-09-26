@@ -34,7 +34,7 @@ def evaluate_payment(
         return PolicyDecision(False, "SKU_MISMATCH")
     if order.currency != vendor.currency:
         return PolicyDecision(False, "CURRENCY_MATCH")
-    if order.qty <= 0 or request.requested_qty <= 0 or order.qty * 2 > request.requested_qty * 3:
+    if order.qty <= 0 or request.requested_qty <= 0 or order.qty != request.requested_qty:
         return PolicyDecision(False, "QUANTITY_SANITY")
     if order.amount_cents <= 0:
         return PolicyDecision(False, "AMOUNT_INVALID")
