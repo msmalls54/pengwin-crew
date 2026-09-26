@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Office Ops Crew</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div><span class="eyebrow">KESTREL / OPERATIONS</span><h1>Office Ops Crew</h1><p>Purchases move through separate agents, a contained shop, and a code-enforced payment gate.</p></div>
+      <div id="mode" class="mode">Connecting…</div>
+    </header>
+    <main>
+      <section class="controls card">
+        <div><h2>Run a request</h2><p>Each flow leaves an audit trail. The attack flow shows the payment gate reject an inflated order.</p></div>
+        <div class="auth"><label for="token">Demo admin token</label><input id="token" type="password" autocomplete="off" placeholder="Enter ADMIN_TOKEN"></div>
+        <div class="actions"><button data-flow="berlin-pantry">Berlin pantry</button><button data-flow="welcome-kit">New hire kit + lunch</button><button data-flow="hoodie-attack" class="attack">Company hoodies + attack</button><button id="freeze" class="secondary">Freeze payments</button><button id="reset" class="secondary">Reset demo</button></div>
+        <p id="feedback" role="status" aria-live="polite"></p>
+      </section>
+      <section class="grid">
+        <div class="card"><div class="card-head"><h2>Live work</h2><span id="connection">● Live</span></div><div id="timeline" class="timeline"></div></div>
+        <div class="stack">
+          <div class="card"><h2>Budgets</h2><div id="budgets"></div></div>
+          <div class="card"><h2>Agent permissions</h2><div id="permissions"></div></div>
+          <div class="card"><h2>Payment receipts</h2><div id="payments"></div></div>
+        </div>
+      </section>
+    </main>
+    <dialog id="receipt"><form method="dialog"><button class="close" aria-label="Close">×</button></form><div id="receipt-body"></div></dialog>
+    <footer>Fictional people and vendors · Airwallex sandbox or clearly marked simulation only</footer>
+  </div>
+</body>
+</html>

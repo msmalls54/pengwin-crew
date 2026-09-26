@@ -1,0 +1,15 @@
+services:
+  mock-stores:
+    build:
+      context: .
+      dockerfile: mock_stores/Dockerfile
+    image: office-ops-mock-stores:latest
+    restart: unless-stopped
+    networks:
+      shopnet:
+        aliases: [mock-stores]
+
+networks:
+  shopnet:
+    name: shopnet
+    internal: true

@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: crew
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: crew
+    volumes:
+      - crew-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crew -d crew"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [control]
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ${SSH_DIR:?Set SSH_DIR in .env}:/home/crew/.ssh:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [control]
+
+  slack:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    command: ["python", "-m", "crew.slack_bot"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
+    volumes:
+      - ${SSH_DIR:?Set SSH_DIR in .env}:/home/crew/.ssh:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [control]
+
+volumes:
+  crew-db:
+
+networks:
+  control:
+    internal: false
