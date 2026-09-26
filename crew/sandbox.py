@@ -30,7 +30,7 @@ class DockerSandbox:
 
         if not settings.docker_host:
             raise RuntimeError("DOCKER_HOST must point to the sandbox VM")
-        self.client = docker.DockerClient(base_url=settings.docker_host)
+        self.client = docker.DockerClient(base_url=settings.docker_host, use_ssh_client=True)
 
     def _job(self, payload: dict) -> dict:
         container = self.client.containers.create(

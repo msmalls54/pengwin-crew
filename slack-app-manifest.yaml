@@ -1,10 +1,10 @@
 _metadata:
   major_version: 1
 display_information:
-  name: Office Ops Crew
+  name: Brackenrow Concierge
 features:
   bot_user:
-    display_name: Office Ops Crew
+    display_name: Brackenrow Concierge
     always_online: false
   slash_commands:
     - command: /crew

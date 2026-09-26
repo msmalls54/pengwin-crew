@@ -1,9 +1,10 @@
-"""Small, allowlisted Slack Socket Mode front door for the fictional demo."""
+"""Concierge: the only inbound Slack bot for the four-agent crew."""
 
 from __future__ import annotations
 
 import hashlib
 import os
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -14,10 +15,7 @@ from .audit import record
 from .config import settings
 from .db import Budget, ControlFlag, SessionLocal
 from .seed import seed_demo
-from .workflow import run_flow
-
-
-HELP = "Use `/crew pantry`, `/crew welcome`, `/crew hoodies`, `/crew status`, or `/crew budgets`. Admins can also use `freeze`, `unfreeze`, and `reset-demo`."
+HELP = "Use `/crew pantry`, `/crew welcome`, `/crew hoodies`, `/crew run <id>`, `/crew status`, or `/crew budgets`. Admins can also use `freeze`, `unfreeze`, and `reset-demo`."
 FLOW_COMMANDS = {"pantry": "berlin-pantry", "welcome": "welcome-kit", "hoodies": "hoodie-attack"}
 
 
@@ -45,14 +43,15 @@ def mention_intent(text: str) -> str | None:
     return None
 
 
-def summary(results: list[dict]) -> str:
-    lines = []
-    for result in results:
-        if result["first_status"] == "BLOCKED":
-            lines.append(f"Blocked a proposed order ({result['blocked_rule']}).")
-        final_status = result.get("corrected_status", result["first_status"])
-        lines.append(f"Request {result['request_id'][:8]}: {final_status}.")
-    return "\n".join(lines)
+def is_demo_channel(channel_id: str) -> bool:
+    configured = os.getenv("SLACK_DEMO_CHANNEL_ID", "")
+    return bool(configured) and channel_id == configured
+
+
+def _submit_run(flow: str, *, source_user: str, channel_id: str) -> str:
+    from .jobs import submit_run
+
+    return submit_run(flow, source_user=source_user, channel_id=channel_id)
 
 
 def claim_delivery(delivery_id: str) -> bool:
@@ -69,22 +68,24 @@ def claim_delivery(delivery_id: str) -> bool:
         return False
 
 
-def run_allowed_flow(flow: str, *, user_id: str, delivery_id: str) -> str:
+def queue_allowed_flow(flow: str, *, user_id: str, channel_id: str, delivery_id: str) -> str:
     if not is_slack_allowed(user_id):
         return "This Slack user is not allowed to run crew requests."
+    if not is_demo_channel(channel_id):
+        return "Crew requests are accepted only in the configured demo channel."
     if not claim_delivery(delivery_id):
         return "This Slack request was already received, or has no delivery ID. Send a new request if needed."
     try:
-        results = run_flow(flow, source="slack", source_user=user_id,
-                           is_admin=is_slack_admin(user_id))
-        return summary(results)
+        run_id = _submit_run(flow, source_user=user_id, channel_id=channel_id)
+        from .jobs import flow_label
+        return f"Concierge accepted {flow_label(flow)}. Run {run_id} is queued; the crew will report in this channel."
     except Exception:
-        # The same delivery must not be replayed after an uncertain provider result.
+        # Preserve the claim: a retry must not create a second purchase-capable job.
         with SessionLocal.begin() as session:
-            record(session, agent="Concierge", action="slack_flow_failed",
+            record(session, agent="Concierge", action="slack_queue_failed",
                    detail={"flow": flow, "delivery_key": hashlib.sha256(delivery_id.encode()).hexdigest()},
                    severity="error")
-        return "The request could not be completed. Check the crew audit timeline for the last confirmed step. Send a new request only after checking for a payment submission."
+        return "The request could not be queued. Check the crew audit timeline before sending a new request."
 
 
 def status_text(*, budgets: bool) -> str:
@@ -92,7 +93,10 @@ def status_text(*, budgets: bool) -> str:
         rows = session.execute(select(Budget).order_by(Budget.office_id, Budget.category)).scalars().all()
         flag = session.get(ControlFlag, "freeze")
         frozen = settings.freeze or bool(flag and flag.value == "true")
-        lines = [f"Payments: {'FROZEN' if frozen else 'active'}"]
+        lines = [f"Payments: {'FROZEN' if frozen else 'active'}",
+                 f"Planner: {settings.planner_mode}" +
+                 (f" ({settings.vultr_model})" if settings.planner_mode == "vultr" else ""),
+                 f"Browser: {settings.sandbox_mode}; payments: {settings.payment_mode}"]
         if budgets:
             lines.extend(
                 f"{row.office_id} {row.category}: "
@@ -103,12 +107,42 @@ def status_text(*, budgets: bool) -> str:
         return "\n".join(lines)
 
 
+def run_status_text(run_id: str, *, user_id: str) -> str:
+    if not is_slack_allowed(user_id):
+        return "This Slack user is not allowed to read crew runs."
+    try:
+        canonical_id = str(UUID(run_id))
+    except ValueError:
+        return "Use a full run ID from Concierge's reply."
+    from .jobs import get_run
+
+    run = get_run(canonical_id)
+    if run is None or (run["source_user"] != user_id and not is_slack_admin(user_id)):
+        return "No run is available for this Slack user."
+    lines = [f"Run {run['id']}: {run['status']} ({run['flow']})."]
+    for job in run["jobs"][-12:]:
+        line = f"{job['role']} {job['kind']}: {job['status']}"
+        if job["role"] == "Treasurer" and job["output"].get("payment_status"):
+            line += f" / {job['output']['payment_status']}"
+            if job["output"].get("blocked_rule"):
+                line += f" ({job['output']['blocked_rule']})"
+        lines.append(line)
+    if run["status"] in {"HELD", "FAILED"}:
+        lines.append("Operator review is required; do not repeat a payment request blindly.")
+    return "\n".join(lines)
+
+
 def handle_command(command: dict) -> str:
     user_id = command.get("user_id", "")
+    channel_id = command.get("channel_id", "")
     action = command.get("text", "").strip().lower()
+    if not is_demo_channel(channel_id):
+        return "Use this crew app in its configured demo channel."
     if action in FLOW_COMMANDS:
-        return run_allowed_flow(FLOW_COMMANDS[action], user_id=user_id,
-                                delivery_id=("command:" + command["trigger_id"]) if command.get("trigger_id") else "")
+        return queue_allowed_flow(FLOW_COMMANDS[action], user_id=user_id, channel_id=channel_id,
+                                  delivery_id=("command:" + command["trigger_id"]) if command.get("trigger_id") else "")
+    if action.startswith("run "):
+        return run_status_text(action.removeprefix("run ").strip(), user_id=user_id)
     if action in ("status", "budgets"):
         if not is_slack_allowed(user_id):
             return "This Slack user is not allowed to read crew status."
@@ -135,11 +169,13 @@ def handle_command(command: dict) -> str:
 
 
 def build_app() -> App:
-    token = os.getenv("SLACK_BOT_TOKEN")
+    token = os.getenv("SLACK_CONCIERGE_BOT_TOKEN")
     if not token:
-        raise RuntimeError("SLACK_BOT_TOKEN is missing")
+        raise RuntimeError("SLACK_CONCIERGE_BOT_TOKEN is missing")
     if not os.getenv("SLACK_APP_TOKEN"):
         raise RuntimeError("SLACK_APP_TOKEN is missing")
+    if not os.getenv("SLACK_DEMO_CHANNEL_ID"):
+        raise RuntimeError("SLACK_DEMO_CHANNEL_ID is missing")
     if not (_ids("SLACK_ALLOWED_USER_IDS") or _ids("SLACK_ADMIN_USER_IDS")):
         raise RuntimeError("Set SLACK_ALLOWED_USER_IDS or SLACK_ADMIN_USER_IDS before starting Slack")
     bot = App(token=token)
@@ -149,6 +185,9 @@ def build_app() -> App:
         if event.get("bot_id") or event.get("subtype"):
             return
         user_id = event.get("user", "")
+        channel_id = event.get("channel", "")
+        if not is_demo_channel(channel_id):
+            return
         if not is_slack_allowed(user_id):
             say("This Slack user is not allowed to run crew requests.")
             return
@@ -156,8 +195,8 @@ def build_app() -> App:
         if flow is None:
             say(HELP)
             return
-        say(run_allowed_flow(flow, user_id=user_id,
-                             delivery_id=("event:" + body["event_id"]) if body.get("event_id") else ""))
+        say(queue_allowed_flow(flow, user_id=user_id, channel_id=channel_id,
+                               delivery_id=("event:" + body["event_id"]) if body.get("event_id") else ""))
 
     @bot.command("/crew")
     def command(ack, respond, command):

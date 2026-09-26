@@ -15,38 +15,133 @@ services:
       retries: 10
     networks: [control]
 
-  api:
+  init:
     build:
       context: .
       dockerfile: Dockerfile.control
-    restart: unless-stopped
-    env_file: .env
+    command: ["python", "-c", "from crew.seed import seed_demo; seed_demo()"]
+    restart: "no"
     environment:
       DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
-    ports:
-      - "127.0.0.1:8000:8000"
-    volumes:
-      - ${SSH_DIR:?Set SSH_DIR in .env}:/home/crew/.ssh:ro
+      AW_BENEFICIARY_KAFFEE: ${AW_BENEFICIARY_KAFFEE:-}
+      AW_BENEFICIARY_DRUCKWERK: ${AW_BENEFICIARY_DRUCKWERK:-}
+      AW_BENEFICIARY_BAY_SUPPLY: ${AW_BENEFICIARY_BAY_SUPPLY:-}
     depends_on:
       db:
         condition: service_healthy
     networks: [control]
 
-  slack:
-    profiles: ["slack"]
+  concierge:
     build:
       context: .
       dockerfile: Dockerfile.control
     command: ["python", "-m", "crew.slack_bot"]
     restart: unless-stopped
-    env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
+      COMPANY_NAME: Brackenrow
+      PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
+      PLANNER_MODE: ${PLANNER_MODE:-deterministic}
+      SANDBOX_MODE: ${SANDBOX_MODE:-local}
+      VULTR_MODEL: ${VULTR_MODEL:-}
+      SLACK_CONCIERGE_BOT_TOKEN: ${SLACK_CONCIERGE_BOT_TOKEN:-}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+      SLACK_DEMO_CHANNEL_ID: ${SLACK_DEMO_CHANNEL_ID:-}
+      SLACK_ALLOWED_USER_IDS: ${SLACK_ALLOWED_USER_IDS:-}
+      SLACK_ADMIN_USER_IDS: ${SLACK_ADMIN_USER_IDS:-}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks: [control]
+
+  concierge-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    command: ["python", "-m", "crew.worker", "Concierge"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
+      COMPANY_NAME: Brackenrow
+      SLACK_CONCIERGE_BOT_TOKEN: ${SLACK_CONCIERGE_BOT_TOKEN:-}
+      SLACK_DEMO_CHANNEL_ID: ${SLACK_DEMO_CHANNEL_ID:-}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks: [control]
+
+  buyer:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    command: ["python", "-m", "crew.worker", "Buyer"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
+      COMPANY_NAME: Brackenrow
+      PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
+      PLANNER_MODE: ${PLANNER_MODE:-deterministic}
+      SANDBOX_MODE: ${SANDBOX_MODE:-local}
+      VULTR_INFERENCE_KEY: ${VULTR_INFERENCE_KEY:-}
+      VULTR_MODEL: ${VULTR_MODEL:-}
+      VULTR_MAX_CALLS: ${VULTR_MAX_CALLS:-30}
+      DOCKER_HOST: ${DOCKER_HOST:-}
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-office-ops-sandbox:latest}
+      SANDBOX_NETWORK: ${SANDBOX_NETWORK:-shopnet}
+      MOCK_STORE_URL: ${MOCK_STORE_URL:-http://mock-stores:8080}
+      SLACK_BUYER_BOT_TOKEN: ${SLACK_BUYER_BOT_TOKEN:-}
+      SLACK_DEMO_CHANNEL_ID: ${SLACK_DEMO_CHANNEL_ID:-}
     volumes:
       - ${SSH_DIR:?Set SSH_DIR in .env}:/home/crew/.ssh:ro
     depends_on:
-      db:
-        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    networks: [control]
+
+  events:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    command: ["python", "-m", "crew.worker", "Events"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
+      COMPANY_NAME: Brackenrow
+      PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
+      SANDBOX_MODE: ${SANDBOX_MODE:-local}
+      DOCKER_HOST: ${DOCKER_HOST:-}
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-office-ops-sandbox:latest}
+      SANDBOX_NETWORK: ${SANDBOX_NETWORK:-shopnet}
+      MOCK_STORE_URL: ${MOCK_STORE_URL:-http://mock-stores:8080}
+      SLACK_EVENTS_BOT_TOKEN: ${SLACK_EVENTS_BOT_TOKEN:-}
+      SLACK_DEMO_CHANNEL_ID: ${SLACK_DEMO_CHANNEL_ID:-}
+    volumes:
+      - ${SSH_DIR:?Set SSH_DIR in .env}:/home/crew/.ssh:ro
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks: [control]
+
+  treasurer:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    command: ["python", "-m", "crew.worker", "Treasurer"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
+      COMPANY_NAME: Brackenrow
+      PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
+      FREEZE: ${FREEZE:-false}
+      AIRWALLEX_CLIENT_ID: ${AIRWALLEX_CLIENT_ID:-}
+      AIRWALLEX_API_KEY: ${AIRWALLEX_API_KEY:-}
+      AIRWALLEX_SANDBOX_BASE: https://api.sandbox.airwallex.com
+      SLACK_TREASURER_BOT_TOKEN: ${SLACK_TREASURER_BOT_TOKEN:-}
+      SLACK_DEMO_CHANNEL_ID: ${SLACK_DEMO_CHANNEL_ID:-}
+      SLACK_ADMIN_USER_IDS: ${SLACK_ADMIN_USER_IDS:-}
+    depends_on:
+      init:
+        condition: service_completed_successfully
     networks: [control]
 
 volumes:

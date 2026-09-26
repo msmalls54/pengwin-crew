@@ -4,17 +4,21 @@ import os
 
 from sqlalchemy import delete, select
 
-from .db import AuditEvent, Budget, ControlFlag, Office, Payment, PendingOrder, Request, Task, Vendor, SessionLocal, init_db
+from .db import AgentJob, AuditEvent, Budget, ControlFlag, CrewRun, Office, Payment, PendingOrder, Request, Task, Vendor, SessionLocal, init_db
 
 
 def seed_demo(*, reset: bool = False) -> None:
     init_db()
     with SessionLocal.begin() as session:
         if reset:
-            for model in (Payment, PendingOrder, Task, Request, AuditEvent, Budget, Vendor, Office):
+            for model in (AgentJob, CrewRun, Payment, PendingOrder, Task, Request, AuditEvent, Budget, Vendor, Office):
                 session.execute(delete(model))
-            # Demo resets must not refresh the paid-inference allowance.
-            session.execute(delete(ControlFlag).where(ControlFlag.key != "vultr_calls"))
+            # Demo resets must not refresh paid inference or Slack delivery claims.
+            # Slack may redeliver an old event after a local reset.
+            session.execute(delete(ControlFlag).where(
+                ControlFlag.key != "vultr_calls",
+                ~ControlFlag.key.like("slack_delivery_%"),
+            ))
         if session.get(Office, "SF") is None:
             session.add_all([
                 Office(id="SF", name="San Francisco", currency="USD"),
@@ -34,8 +38,13 @@ def seed_demo(*, reset: bool = False) -> None:
             Vendor(id="druckwerk", office_id="BER", name="Druckwerk", currency="EUR", kind="mock", beneficiary_id=os.getenv("AW_BENEFICIARY_DRUCKWERK") or None),
             Vendor(id="bay-supply", office_id="SF", name="Bay Supply", currency="USD", kind="mock", beneficiary_id=os.getenv("AW_BENEFICIARY_BAY_SUPPLY") or None),
         ):
-            if session.get(Vendor, vendor.id) is None:
+            existing = session.get(Vendor, vendor.id)
+            if existing is None:
                 session.add(vendor)
+            elif vendor.beneficiary_id and existing.beneficiary_id != vendor.beneficiary_id:
+                # Adding a scoped sandbox beneficiary after the first boot must
+                # update the canonical vendor record before any transfer run.
+                existing.beneficiary_id = vendor.beneficiary_id
         if session.get(ControlFlag, "freeze") is None:
             session.add(ControlFlag(key="freeze", value="false"))
         if session.get(ControlFlag, "vultr_calls") is None:

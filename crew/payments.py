@@ -72,19 +72,8 @@ class AirwallexSandboxProvider:
             raise ProviderError(f"Could not read Airwallex balance: {type(exc).__name__}", definitive=False) from exc
 
     def submit(self, *, payment_id: str, amount_cents: int, currency: str, beneficiary_id: str | None) -> tuple[str, str]:
-        if not beneficiary_id:
-            raise ProviderError("Saved sandbox beneficiary is missing", definitive=True)
-        amount = str((Decimal(amount_cents) / 100).quantize(Decimal("0.01")))
-        body = {
-            "beneficiary_id": beneficiary_id,
-            "transfer_amount": amount,
-            "transfer_currency": currency,
-            "source_currency": currency,
-            "transfer_method": "LOCAL",
-            "reason": "office supplies",
-            "reference": f"CREW-{payment_id[:18]}",
-            "request_id": payment_id,
-        }
+        body = self.transfer_body(payment_id=payment_id, amount_cents=amount_cents,
+                                  currency=currency, beneficiary_id=beneficiary_id)
         try:
             response = httpx.post(f"{self.base}/api/v1/transfers/create", headers=self._headers(), json=body, timeout=30)
             response.raise_for_status()
@@ -95,6 +84,23 @@ class AirwallexSandboxProvider:
             raise ProviderError(f"Airwallex rejected transfer: HTTP {exc.response.status_code}", definitive=definitive) from exc
         except (httpx.RequestError, KeyError, ValueError) as exc:
             raise ProviderError(f"Airwallex transfer outcome unknown: {type(exc).__name__}", definitive=False) from exc
+
+    @staticmethod
+    def transfer_body(*, payment_id: str, amount_cents: int, currency: str,
+                      beneficiary_id: str | None) -> dict:
+        if not beneficiary_id:
+            raise ProviderError("Saved sandbox beneficiary is missing", definitive=True)
+        amount = str((Decimal(amount_cents) / 100).quantize(Decimal("0.01")))
+        return {
+            "beneficiary_id": beneficiary_id,
+            "transfer_amount": amount,
+            "transfer_currency": currency,
+            "source_currency": currency,
+            "transfer_method": "LOCAL",
+            "reason": "office supplies",
+            "reference": f"CREW-{payment_id[:18]}",
+            "request_id": payment_id,
+        }
 
 
 def provider():

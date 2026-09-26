@@ -65,6 +65,32 @@ class Task(Base):
     output_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
+class CrewRun(Base):
+    __tablename__ = "crew_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    flow: Mapped[str] = mapped_column(String(40))
+    source_user: Mapped[str] = mapped_column(String(100))
+    channel_id: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(30), default="QUEUED")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentJob(Base):
+    __tablename__ = "agent_jobs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("crew_runs.id"), index=True)
+    role: Mapped[str] = mapped_column(String(20), index=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    input_json: Mapped[str] = mapped_column(Text)
+    output_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(30), default="QUEUED", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class PendingOrder(Base):
     __tablename__ = "pending_orders"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

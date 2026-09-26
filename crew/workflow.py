@@ -40,8 +40,8 @@ def _pending_order(*, request_id: str, sku: str, qty: int, browser) -> PendingOr
     return order
 
 
-def run_purchase(*, office: str, sku: str, qty: int, source: str = "web", source_user: str = "demo",
-                 text: str | None = None, is_admin: bool = False) -> dict:
+def prepare_purchase(*, office: str, sku: str, qty: int, source: str = "web", source_user: str = "demo",
+                     text: str | None = None) -> dict:
     if sku not in PRODUCTS or qty < 1 or qty > 1000:
         raise ValueError("Unknown SKU or invalid quantity")
     product = PRODUCTS[sku]
@@ -84,29 +84,52 @@ def run_purchase(*, office: str, sku: str, qty: int, source: str = "web", source
                        "model": settings.vultr_model if settings.planner_mode == "vultr" else None})
 
     first_order = _pending_order(request_id=request_id, sku=choice.sku, qty=choice.quantity, browser=browser)
-    first_payment = pay_pending_order(first_order.id, is_admin=is_admin)
-    result = {"request_id": request_id, "first_order_id": first_order.id,
+    return {"request_id": request_id, "first_order_id": first_order.id,
+            "requested_sku": sku, "requested_qty": qty,
+            "proposed_sku": choice.sku, "proposed_qty": choice.quantity,
+            "planner_mode": settings.planner_mode,
+            "model": settings.vultr_model if settings.planner_mode == "vultr" else None,
+            "sandbox_mode": settings.sandbox_mode, "payment_mode": settings.payment_mode}
+
+
+def requote_purchase(request_id: str) -> str:
+    with SessionLocal() as session:
+        request = session.get(Request, request_id)
+        if request is None or request.sku not in PRODUCTS:
+            raise ValueError("Purchase request is missing")
+        sku, qty = request.sku, request.requested_qty
+    corrected = _pending_order(request_id=request_id, sku=sku, qty=qty, browser=sandbox())
+    with SessionLocal.begin() as session:
+        record(session, agent="Buyer", action="requote_after_block", request_id=request_id,
+               detail={"corrected_sku": sku, "corrected_qty": qty, "new_order_id": corrected.id})
+    return corrected.id
+
+
+def run_purchase(*, office: str, sku: str, qty: int, source: str = "web", source_user: str = "demo",
+                 text: str | None = None, is_admin: bool = False) -> dict:
+    prepared = prepare_purchase(office=office, sku=sku, qty=qty, source=source,
+                                source_user=source_user, text=text)
+    request_id = prepared["request_id"]
+    first_order_id = prepared["first_order_id"]
+    first_payment = pay_pending_order(first_order_id, is_admin=is_admin)
+    result = {"request_id": request_id, "first_order_id": first_order_id,
               "first_payment_id": first_payment.id, "first_status": first_payment.status,
-              "blocked_rule": first_payment.blocked_rule, "planner_mode": settings.planner_mode,
-              "model": settings.vultr_model if settings.planner_mode == "vultr" else None,
-              "sandbox_mode": settings.sandbox_mode, "payment_mode": settings.payment_mode}
-    if first_payment.blocked_rule in {"QUANTITY_SANITY", "SKU_MISMATCH", "VENDOR_ALLOWLIST"} and (choice.sku != sku or choice.quantity != qty):
-        corrected = _pending_order(request_id=request_id, sku=sku, qty=qty, browser=browser)
-        corrected_payment = pay_pending_order(corrected.id, is_admin=is_admin)
-        with SessionLocal.begin() as session:
-            record(session, agent="Buyer", action="requote_after_block", request_id=request_id,
-                   detail={"original_sku": choice.sku, "corrected_sku": sku,
-                           "original_qty": choice.quantity, "corrected_qty": qty,
-                           "new_order_id": corrected.id})
-        result.update({"corrected_order_id": corrected.id,
+              "blocked_rule": first_payment.blocked_rule, "planner_mode": prepared["planner_mode"],
+              "model": prepared["model"], "sandbox_mode": prepared["sandbox_mode"],
+              "payment_mode": prepared["payment_mode"]}
+    if first_payment.blocked_rule in {"QUANTITY_SANITY", "SKU_MISMATCH", "VENDOR_ALLOWLIST"} and (
+        prepared["proposed_sku"] != sku or prepared["proposed_qty"] != qty
+    ):
+        corrected_order_id = requote_purchase(request_id)
+        corrected_payment = pay_pending_order(corrected_order_id, is_admin=is_admin)
+        result.update({"corrected_order_id": corrected_order_id,
                        "corrected_payment_id": corrected_payment.id,
                        "corrected_status": corrected_payment.status,
                        "corrected_blocked_rule": corrected_payment.blocked_rule})
     return result
 
 
-def run_berlin_lunch(*, headcount: int = 8, source: str = "web", source_user: str = "demo",
-                      is_admin: bool = False) -> dict:
+def prepare_berlin_lunch(*, headcount: int = 8, source: str = "web", source_user: str = "demo") -> dict:
     if not 1 <= headcount <= 40:
         raise ValueError("Invalid lunch headcount")
     berlin = ZoneInfo("Europe/Berlin")
@@ -126,7 +149,6 @@ def run_berlin_lunch(*, headcount: int = 8, source: str = "web", source_user: st
                detail={"headcount": headcount, "date": lunch_day.isoformat()})
     browser = sandbox()
     order = _pending_order(request_id=request_id, sku="LUNCH-BER", qty=headcount, browser=browser)
-    payment = pay_pending_order(order.id, is_admin=is_admin)
     invite = (
         "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Office Ops Crew//EN\r\n"
         "BEGIN:VEVENT\r\n"
@@ -141,14 +163,35 @@ def run_berlin_lunch(*, headcount: int = 8, source: str = "web", source_user: st
         _task(session, request_id, agent="Events", kind="lunch",
               input_data={"headcount": headcount, "date": lunch_day.isoformat()},
               output_data={"venue": "Kaffee Kontor", "amount_cents": order.amount_cents,
-                           "payment_status": payment.status, "ics": invite})
+                           "payment_status": "PENDING", "ics": invite})
         record(session, agent="Events", action="lunch_planned", request_id=request_id,
                detail={"venue": "Kaffee Kontor", "headcount": headcount,
-                       "date": lunch_day.isoformat(), "payment_status": payment.status})
-    return {"request_id": request_id, "first_order_id": order.id, "first_payment_id": payment.id,
-            "first_status": payment.status, "blocked_rule": payment.blocked_rule,
+                       "date": lunch_day.isoformat(), "payment_status": "PENDING"})
+    return {"request_id": request_id, "first_order_id": order.id,
             "planner_mode": "deterministic-events", "sandbox_mode": settings.sandbox_mode,
             "payment_mode": settings.payment_mode, "invite_ready": True}
+
+
+def complete_berlin_lunch(request_id: str, payment_status: str) -> None:
+    with SessionLocal.begin() as session:
+        task = session.execute(select(Task).where(Task.request_id == request_id,
+                                                  Task.agent == "Events", Task.kind == "lunch")).scalar_one()
+        output = json.loads(task.output_json)
+        output["payment_status"] = payment_status
+        task.output_json = json.dumps(output)
+        record(session, agent="Events", action="lunch_payment_status", request_id=request_id,
+               detail={"payment_status": payment_status})
+
+
+def run_berlin_lunch(*, headcount: int = 8, source: str = "web", source_user: str = "demo",
+                      is_admin: bool = False) -> dict:
+    prepared = prepare_berlin_lunch(headcount=headcount, source=source, source_user=source_user)
+    payment = pay_pending_order(prepared["first_order_id"], is_admin=is_admin)
+    complete_berlin_lunch(prepared["request_id"], payment.status)
+    return {"request_id": prepared["request_id"], "first_order_id": prepared["first_order_id"], "first_payment_id": payment.id,
+            "first_status": payment.status, "blocked_rule": payment.blocked_rule,
+            "planner_mode": prepared["planner_mode"], "sandbox_mode": prepared["sandbox_mode"],
+            "payment_mode": prepared["payment_mode"], "invite_ready": True}
 
 
 def run_flow(flow: str, *, source: str = "web", source_user: str = "demo",

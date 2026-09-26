@@ -11,7 +11,7 @@ load_dotenv()
 @dataclass(frozen=True)
 class Settings:
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./crew.db")
-    company_name: str = os.getenv("COMPANY_NAME", "Kestrel")
+    company_name: str = os.getenv("COMPANY_NAME", "Brackenrow")
     payment_mode: str = os.getenv("PAYMENT_MODE", "simulated")
     planner_mode: str = os.getenv("PLANNER_MODE", "deterministic")
     sandbox_mode: str = os.getenv("SANDBOX_MODE", "local")
