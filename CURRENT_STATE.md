@@ -28,6 +28,8 @@ The personal DoorDash CLI is excluded from Pengwin business buying under the doc
 
 The previous Eventbrite free ticket publication and Airwallex sandbox transfer receipts remain in docs/eventbrite-integration.md and docs/airwallex-sandbox-receipt.md. Airwallex submission was read back as PROCESSING, not settled money. The workers still share one database login, so role separation is application-enforced; this needs stronger DB grants for real users. The judge token cannot access operator controls. The anonymous feed exposes only fixed role/action/status labels, checked product estimate, and aggregate counters; tests and deployment checks exclude Slack text, contact details, addresses, credentials, and provider references.
 
+The public feed currently aggregates fictional demo rows from one database. Its new `PUBLIC_JUDGE_FEED` switch defaults off on fresh deployments; the hackathon control host explicitly enables it. Before real users or tenant data share this database, disable the endpoint or enforce tenant/demo scoping rather than exposing aggregate amounts and action times.
+
 ## Remaining delivery work
 
 1. The [five-slide PDF](https://github.com/msmalls54/pengwin-crew/blob/master/assets/deck/pengwin-agent-arena-submission.pdf) opened anonymously in GitHub's viewer. The [59-second MP4](https://104-156-229-63.sslip.io/static/pengwin-challenge1-demo.mp4) returned HTTP 200 with `video/mp4` and byte ranges; an anonymous browser loaded its 1920×1080 video player and read a 59-second duration. The video identifies the 11:19 pre-start scaffold and later hackathon work.

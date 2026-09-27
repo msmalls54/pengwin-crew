@@ -17,6 +17,7 @@ class Settings:
     sandbox_mode: str = os.getenv("SANDBOX_MODE", "local")
     admin_token: str = os.getenv("ADMIN_TOKEN", "")
     web_demo_token: str = os.getenv("WEB_DEMO_TOKEN", "")
+    public_judge_feed: bool = os.getenv("PUBLIC_JUDGE_FEED", "false").lower() == "true"
     freeze: bool = os.getenv("FREEZE", "false").lower() == "true"
     vultr_key: str = os.getenv("VULTR_INFERENCE_KEY", "")
     vultr_model: str = os.getenv("VULTR_MODEL", "")

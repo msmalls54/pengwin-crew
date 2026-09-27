@@ -22,6 +22,8 @@ Events can also answer “What events do we currently have live?” and a same-t
 
 For external facts, all four roles share a capped, read-only Brave research service. Search results are leads until checked against a publisher page; the raw search response is not stored. With no Brave key configured, agents say live search is unavailable. The judge feed excludes Slack text, contact details, addresses, and credentials; it separates estimates, simulated checkouts, sandbox transfers, and model-call counts.
 
+The anonymous activity endpoint is an explicit demo setting (`PUBLIC_JUDGE_FEED=true` on the current control host) and defaults off elsewhere. It aggregates fictional demo records; disable it or add tenant-scoped data selection before putting real customer work in this database.
+
 ## Talk to the crew
 
 In `#pengwin-ops`, mention Concierge: **“Can you order 3 oat milk cartons and 2 coffee bags for Berlin?”** Or mention Buyer directly with a simple order. Concierge extracts the stated items, quantities, and office; Buyer checks each fictional store quote; Treasurer checks the budget and records a **demo checkout**. Mention Events for a team lunch or an approval-gated event draft. Missing quantities, unclear offices, and unsupported items get a clarification instead of a guessed order. The four agents report in their own voices in one Slack thread. `/crew` remains available for shortcuts and run controls.

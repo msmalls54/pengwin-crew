@@ -11,6 +11,7 @@ def test_judge_feed_separates_outcomes_and_redacts_private_data(tmp_path):
         "DATABASE_URL": f"sqlite:///{tmp_path / 'judge-feed.db'}",
         "ADMIN_TOKEN": "operator-token-more-than-24-characters",
         "WEB_DEMO_TOKEN": "judge-token-more-than-24-characters",
+        "PUBLIC_JUDGE_FEED": "true",
         "PLANNER_MODE": "vultr",
         "SANDBOX_MODE": "docker",
         "PAYMENT_MODE": "simulated",
@@ -138,6 +139,30 @@ with TestClient(app) as client:
     invalid = {**source_output, "subtotal_max": 900.0}
     assert _judge_product_estimate(SimpleNamespace(role="Buyer", kind="product_source",
                                                     status="DONE", output_json=json.dumps(invalid))) is None
+'''
+    result = subprocess.run([sys.executable, "-c", script], env=env,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+
+
+def test_anonymous_activity_requires_explicit_demo_opt_in(tmp_path):
+    env = os.environ.copy()
+    env.update({
+        "DATABASE_URL": f"sqlite:///{tmp_path / 'judge-disabled.db'}",
+        "ADMIN_TOKEN": "operator-token-more-than-24-characters",
+        "WEB_DEMO_TOKEN": "judge-token-more-than-24-characters",
+        "PUBLIC_JUDGE_FEED": "false",
+    })
+    script = r'''
+from fastapi.testclient import TestClient
+from crew.app import app
+
+with TestClient(app) as client:
+    assert client.get("/api/public-activity").status_code == 404
+    assert client.get("/api/judge-activity").status_code == 401
+    assert client.get("/api/judge-activity", headers={
+        "Authorization": "Bearer judge-token-more-than-24-characters",
+    }).status_code == 200
 '''
     result = subprocess.run([sys.executable, "-c", script], env=env,
                             capture_output=True, text=True, timeout=30)

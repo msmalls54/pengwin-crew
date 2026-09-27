@@ -41,6 +41,7 @@ services:
       DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
       ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env}
       WEB_DEMO_TOKEN: ${WEB_DEMO_TOKEN:?Set WEB_DEMO_TOKEN in .env}
+      PUBLIC_JUDGE_FEED: ${PUBLIC_JUDGE_FEED:-false}
       COMPANY_NAME: Pengwin
       PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
       PLANNER_MODE: ${PLANNER_MODE:-deterministic}

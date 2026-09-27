@@ -401,6 +401,8 @@ def _judge_activity_payload():
 @app.get("/api/public-activity")
 def public_activity():
     """Give judges a read-only activity view without sharing a demo token."""
+    if not settings.public_judge_feed:
+        raise HTTPException(404)
     return _judge_activity_payload()
 
 
