@@ -73,6 +73,14 @@ with SessionLocal() as session:
 assert any("has not reserved a venue" in text for role, text in messages if role == "Events")
 assert any("$60.75–$70.23" in text for role, text in messages if role == "Buyer")
 assert any("No funds were reserved" in text for role, text in messages if role == "Treasurer")
+park_plan = ProjectPlan(name="Pengwin park event",
+                        event=EventProposal(title="Pengwin park event",
+                                            date_phrase="in about a month",
+                                            venue_name="Salesforce Park"))
+park_output, park_message = jobs._project_event_work(None, park_plan.model_dump(mode="json"))
+assert park_output["official_reservation_route"]["url"] == "https://www.tjpa.org/permits-reservations"
+assert park_output["official_reservation_route"]["availability"] == "UNCHECKED"
+assert "No reservation has been requested" in park_message
 '''
     result = subprocess.run([sys.executable, "-c", script], env=env,
                             capture_output=True, text=True, timeout=45)

@@ -96,17 +96,36 @@ function renderJudge(data) {
     ['Sandbox transfers submitted',data.spend?.submitted_sandbox_transfers||[],'Submission is recorded; settlement is unconfirmed.']
   ];
   $('judge-spend').classList.remove('empty-view');
-  $('judge-spend').replaceChildren(...groups.map(([label,amounts,description])=>{
+  const spendItems=groups.map(([label,amounts,description])=>{
     const item=node('div','spend-row');
     const values=amounts.length ? amounts.map(entry=>`${money(entry.amount_cents,entry.currency)} (${entry.count})`).join(' · ') : 'None recorded';
     item.append(node('strong','',label),node('span','spend-value',values),node('small','',description));
     return item;
-  }),(()=>{
-    const item=node('div','spend-row real-spend');
-    item.append(node('strong','','Real settled spend'),node('span','spend-value','Not verified here'),
-      node('small','','Pengwin has no production settlement ledger. These figures do not represent a bank balance.'));
-    return item;
-  })());
+  });
+  const estimate=data.spend?.water_bottle_product_estimate;
+  const estimateItem=node('div','spend-row estimate-row');
+  estimateItem.append(node('strong','','Sourced water-bottle range'));
+  if(estimate){
+    estimateItem.append(node('span','spend-value',`${money(estimate.unit_min_cents,'USD')}–${money(estimate.unit_max_cents,'USD')} each`));
+    if(estimate.quantity!==null){
+      estimateItem.append(node('small','',`${estimate.quantity} bottles · estimated product subtotal ${money(estimate.subtotal_min_cents,'USD')}–${money(estimate.subtotal_max_cents,'USD')}`));
+    }
+    estimateItem.append(node('small','',`Official catalog range checked ${readableTime(estimate.checked_at)}. Shipping, tax, design, stock, and final checkout total are unverified.`));
+    if(estimate.source_url==='https://www.printful.com/custom-water-bottles'){
+      const link=node('a','source-link','View Printful catalog source ↗');
+      link.href=estimate.source_url; link.target='_blank'; link.rel='noopener noreferrer';
+      estimateItem.append(link);
+    }
+  } else {
+    estimateItem.append(node('span','spend-value','No verified range recorded'),
+      node('small','','A search result alone is not a product price or checkout quote.'));
+  }
+  spendItems.splice(1,0,estimateItem);
+  const realItem=node('div','spend-row real-spend');
+  realItem.append(node('strong','','Real settled spend'),node('span','spend-value','Not verified here'),
+    node('small','','Pengwin has no production settlement ledger. These figures do not represent a bank balance.'));
+  spendItems.push(realItem);
+  $('judge-spend').replaceChildren(...spendItems);
 
   const usage=data.model_usage||{};
   $('judge-model').classList.remove('empty-view');
@@ -171,7 +190,7 @@ function renderCodeRun(run) {
     card.append(node('h3','',`Attempt ${index+1} · exit ${attempt.exit_code} · ${attempt.code_hash}`));
     card.append(node('div','code-label','Executed Python'),node('pre','',attempt.code));
     card.append(node('div','code-label','stdout'),node('pre','',attempt.stdout||'(empty)'));
-    if(attempt.stderr) card.append(node('div','code-label','stderr'),node('pre error-output',attempt.stderr));
+    if(attempt.stderr) card.append(node('div','code-label','stderr'),node('pre','error-output',attempt.stderr));
     return card;
   }));
   if(['COMPLETE','FAILED','HELD'].includes(run.status)) activeCodeRun='';

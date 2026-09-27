@@ -4,7 +4,8 @@ import asyncio
 import hmac
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -178,14 +179,17 @@ _JUDGE_FLOWS = {
     "berlin-pantry": "Berlin pantry demo", "welcome-kit": "Welcome kit demo",
     "hoodie-attack": "Hoodie safety demo", "natural-language": "Crew request",
     "luma-event": "Luma event draft", "eventbrite-event": "Free RSVP event",
-    "code-task": "Sandbox code task",
+    "code-task": "Sandbox code task", "project-plan": "Event and swag plan",
+    "event-status": "Event status check",
 }
 _JUDGE_KINDS = {
     ("Concierge", "dispatch"): "Coordinate",
     ("Buyer", "purchase"): "Check mock offer", ("Buyer", "requote"): "Check corrected offer",
-    ("Buyer", "code_execute"): "Execute code", ("Events", "lunch_prepare"): "Prepare lunch",
+    ("Buyer", "code_execute"): "Execute code", ("Buyer", "product_source"): "Source water bottles",
+    ("Events", "lunch_prepare"): "Prepare lunch", ("Events", "event_research"): "Research event options",
     ("Events", "lunch_complete"): "Finish lunch plan", ("Events", "luma_publish"): "Publish Luma event",
-    ("Events", "eventbrite_publish"): "Publish RSVP page", ("Treasurer", "pay"): "Check payment",
+    ("Events", "eventbrite_publish"): "Publish RSVP page", ("Events", "eventbrite_status"): "Check RSVP status",
+    ("Treasurer", "pay"): "Check payment", ("Treasurer", "budget_review"): "Review estimated budget",
 }
 _JUDGE_STATUSES = {"QUEUED", "RUNNING", "WAITING_APPROVAL", "COMPLETE", "DONE", "FAILED", "HELD", "REJECTED"}
 
@@ -295,6 +299,63 @@ def _judge_run(run: CrewRun, jobs: list[AgentJob]) -> dict | None:
     return {"flow": flow, "status": run.status, "created_at": _utc_iso(run.created_at), "steps": steps[:8]}
 
 
+def _price_cents(value: object, *, ceiling: int) -> int | None:
+    if type(value) not in {int, float}:
+        return None
+    try:
+        cents = Decimal(str(value)) * 100
+    except InvalidOperation:
+        return None
+    if not cents.is_finite() or cents != cents.to_integral_value() or not 0 <= cents <= ceiling:
+        return None
+    return int(cents)
+
+
+def _judge_product_estimate(job: AgentJob) -> dict | None:
+    """Expose only a checked catalog range from a completed sourcing step."""
+    if (job.role, job.kind, job.status) != ("Buyer", "product_source", "DONE"):
+        return None
+    try:
+        output = json.loads(job.output_json)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(output, dict) or any((
+        output.get("status") != "RESEARCHED",
+        output.get("product") != "water_bottle",
+        output.get("publisher_status") != "ok",
+        output.get("price_kind") != "PRODUCT_RANGE_ESTIMATE",
+        output.get("checkout_status") != "NOT_READY",
+        output.get("currency") != "USD",
+        output.get("source_url") != "https://www.printful.com/custom-water-bottles",
+    )):
+        return None
+    try:
+        checked_at = datetime.fromisoformat(output["checked_at"].replace("Z", "+00:00"))
+    except (KeyError, AttributeError, TypeError, ValueError):
+        return None
+    if checked_at.tzinfo is None or checked_at > datetime.now(timezone.utc) + timedelta(minutes=5):
+        return None
+    low = _price_cents(output.get("unit_min"), ceiling=100_000)
+    high = _price_cents(output.get("unit_max"), ceiling=100_000)
+    if low is None or high is None or low <= 0 or high < low:
+        return None
+    quantity = output.get("quantity")
+    subtotal_low = subtotal_high = None
+    if quantity is not None:
+        if type(quantity) is not int or not 1 <= quantity <= 1000:
+            return None
+        subtotal_low = _price_cents(output.get("subtotal_min"), ceiling=100_000_000)
+        subtotal_high = _price_cents(output.get("subtotal_max"), ceiling=100_000_000)
+        if subtotal_low != low * quantity or subtotal_high != high * quantity:
+            return None
+    elif output.get("subtotal_min") is not None or output.get("subtotal_max") is not None:
+        return None
+    return {"currency": "USD", "unit_min_cents": low, "unit_max_cents": high,
+            "quantity": quantity, "subtotal_min_cents": subtotal_low,
+            "subtotal_max_cents": subtotal_high, "checked_at": _utc_iso(checked_at),
+            "source_url": "https://www.printful.com/custom-water-bottles"}
+
+
 @app.get("/api/judge-activity")
 def judge_activity(_role: str = Depends(require_demo)):
     """A deliberately narrow read model for the judge token."""
@@ -311,6 +372,11 @@ def judge_activity(_role: str = Depends(require_demo)):
         proposed = _currency_totals(session, PendingOrder)
         simulated = _currency_totals(session, Payment, "SIMULATED", True)
         submitted_sandbox = _currency_totals(session, Payment, "SUBMITTED_SANDBOX", False)
+        product_sources = session.execute(select(AgentJob).where(
+            AgentJob.role == "Buyer", AgentJob.kind == "product_source", AgentJob.status == "DONE",
+        ).order_by(AgentJob.updated_at.desc(), AgentJob.id.desc()).limit(20)).scalars().all()
+        product_estimate = next((item for job in product_sources
+                                 if (item := _judge_product_estimate(job)) is not None), None)
         counter = session.get(ControlFlag, "vultr_calls")
     try:
         attempted_calls = max(0, int(counter.value)) if counter else 0
@@ -322,6 +388,7 @@ def judge_activity(_role: str = Depends(require_demo)):
         "runs": runs,
         "spend": {
             "proposed_mock_orders": proposed,
+            "water_bottle_product_estimate": product_estimate,
             "simulated_checkouts": simulated,
             "submitted_sandbox_transfers": submitted_sandbox,
             "real_settled": None,

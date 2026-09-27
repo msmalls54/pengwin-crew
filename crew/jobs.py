@@ -531,6 +531,17 @@ def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
     )
     venue_search = None
     route_search = None
+    official_route = None
+    if venue and re.fullmatch(r"(?:the\s+)?salesforce park", venue.strip(), re.I):
+        # TJPA's own permits page was checked on 2026-09-27. It separates
+        # ticketed/private events, simple group outings, and public activations.
+        # This is an inquiry route, never evidence of availability or a booking.
+        official_route = {
+            "operator": "Transbay Joint Powers Authority",
+            "url": "https://www.tjpa.org/permits-reservations",
+            "checked_at": "2026-09-27",
+            "availability": "UNCHECKED",
+        }
     if venue:
         venue_search = lookup_project_facts(f"{venue} event venue", kind="place", max_results=2)
         route_search = lookup_project_facts(f"{venue} official event reservation permit", kind="web", max_results=2)
@@ -553,8 +564,20 @@ def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
         leads = [f"{lead.title}: {lead.url}" for lead in route_search.results if lead.url]
         if leads:
             lines.append("Possible reservation routes to verify with the venue: " + " | ".join(leads[:2]))
+    if official_route:
+        lines.append(
+            "Official Salesforce Park inquiry route (TJPA; reviewed 2026-09-27): "
+            + official_route["url"]
+            + ". TJPA distinguishes ticketed/private events, group outings, and public "
+              "activations; confirm the right permit and availability with the operator. "
+              "No reservation has been requested."
+        )
     if venue_search and venue_search.status != "ok":
-        lines.append("Live venue search is unavailable; please share the park's city or official booking page.")
+        lines.append(
+            "Live venue search is unavailable; availability is not checked."
+            if official_route else
+            "Live venue search is unavailable; please share the park's city or official booking page."
+        )
     elif not venue:
         lines.append("Which venue and city should I research?")
     lines.append("Draft description: " + description)
@@ -568,6 +591,7 @@ def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
         "description_draft": description,
         "invitation_draft": invite_copy if plan.invitations else None,
         "research_status": (venue_search.status if venue_search else "not_requested"),
+        "official_reservation_route": official_route,
     }
     return output, "\n".join(lines)[:3000]
 
