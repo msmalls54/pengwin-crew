@@ -261,6 +261,20 @@ def _sourcing_reply(proposal: SourcingProposal) -> str:
             "a current total, and your approval.")[:1800]
 
 
+def _water_bottle_purchase_question(text: str) -> str | None:
+    """Keep a quantity-free prize request out of the fictional demo catalog."""
+    if not re.search(r"\bwater\s*bottles?\b", text, re.I):
+        return None
+    if not _looks_like_purchase(text):
+        return None
+    result = lookup_project_facts("plain reusable water bottles business suppliers", kind="web", max_results=2)
+    sources = [f"{item.title} ({item.url})" for item in result.results[:2] if item.url] if result.status == "ok" else []
+    found = " Supplier leads: " + "; ".join(sources) + "." if sources else ""
+    return ("Yes. I can source water bottles for the event prizes." + found +
+            " Tell me how many, whether you want plain or printed bottles, and the delivery city. "
+            "I'll bring back a specific option and total for your checkout decision.")[:1800]
+
+
 def answer(role: str, text: str, *, user_id: str, channel_id: str,
            delivery_id: str, thread_ts: str | None = None,
            context: str = "") -> str:
@@ -306,7 +320,8 @@ def answer(role: str, text: str, *, user_id: str, channel_id: str,
                     "Ask Concierge to set up a supported request for review. Real payments are not enabled here.")
     if lower.startswith("run "):
         return run_status_text(text[4:].strip(), user_id=user_id)
-    if role in {"Concierge", "Events"} and _looks_like_event_status(text, context):
+    if (role in {"Concierge", "Events"} and _looks_like_event_status(text, context)
+            and not _looks_like_event_request(text)):
         return queue_allowed_flow("event-status", user_id=user_id, channel_id=channel_id,
                                   delivery_id=delivery_id, request_text=text, context=context)
     if re.search(r"\b(status|progress|update|happened|going)\b", lower) and re.search(
@@ -321,6 +336,11 @@ def answer(role: str, text: str, *, user_id: str, channel_id: str,
             return status_text(budgets=False)
         if lower in {"budgets", "budget"}:
             return status_text(budgets=True)
+    if (role in {"Concierge", "Events"} and _looks_like_event_request(text)
+            and re.search(r"\beventbrite\b", text, re.I)
+            and not re.search(r"\b(?:bottles?|swag|merch|buy|order|purchase|source)\b", text, re.I)):
+        return queue_allowed_flow("eventbrite-event", user_id=user_id, channel_id=channel_id,
+                                  delivery_id=delivery_id, request_text=text)
     if role in {"Concierge", "Events"} and is_multi_part_project_request(text, context):
         return queue_allowed_flow("project-plan", user_id=user_id, channel_id=channel_id,
                                   delivery_id=delivery_id, request_text=text, context=context)
@@ -330,6 +350,9 @@ def answer(role: str, text: str, *, user_id: str, channel_id: str,
         sourcing = generic_sourcing_proposal(text)
         if sourcing:
             return _sourcing_reply(sourcing)
+        bottle_reply = _water_bottle_purchase_question(text)
+        if bottle_reply:
+            return bottle_reply
     if role in {"Concierge", "Buyer"} and _looks_like_purchase(text):
         return queue_allowed_flow("natural-language", user_id=user_id, channel_id=channel_id,
                                   delivery_id=delivery_id, request_text=text)

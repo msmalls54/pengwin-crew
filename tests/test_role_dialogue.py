@@ -66,6 +66,9 @@ assert calls[-1][1]['context'] == prior
 assert dialogue._looks_like_event_status('What about Oct 2nd?', prior)
 assert dialogue._looks_like_event_status('How about on Oct 2nd?', prior)
 assert not dialogue._looks_like_event_status('And on Oct 2nd?', 'USER: Plan a new event')
+assert dialogue.answer('Events', 'Create a live Eventbrite event with 20 free RSVP spots',
+    user_id='U-owner', channel_id='C-demo', delivery_id='event:create-live-rsvp') == 'queued'
+assert calls[-1][0] == 'eventbrite-event'
 assert dialogue.answer('Events', 'set up a Berlin team lunch for 5',
     user_id='U-owner', channel_id='C-demo', delivery_id='event:4') == 'queued'
 

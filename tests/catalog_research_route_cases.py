@@ -43,6 +43,24 @@ def test_hoodie_purchase_remains_in_purchase_flow(monkeypatch):
                            delivery_id="event:hoodie-buy") == "natural-language"
 
 
+def test_buyer_bottle_question_does_not_fall_into_demo_catalog(monkeypatch):
+    from crew import dialogue
+
+    calls = []
+    monkeypatch.setattr(dialogue, "lookup_project_facts", lambda query, **kwargs:
+                        calls.append((query, kwargs)) or SimpleNamespace(
+                            status="ok", results=[SimpleNamespace(
+                                title="Reusable bottles", url="https://example.org/bottles")]))
+    monkeypatch.setattr(dialogue, "queue_allowed_flow", lambda *args, **kwargs:
+                        (_ for _ in ()).throw(AssertionError("bottle question entered demo checkout")))
+    reply = dialogue.answer("Buyer", "can we buy water bottles for the event",
+                            user_id="U-owner", channel_id="C-demo",
+                            delivery_id="event:prize-bottles")
+    assert "Reusable bottles" in reply and "https://example.org/bottles" in reply
+    assert "Tell me how many" in reply
+    assert calls == [("plain reusable water bottles business suppliers", {"kind": "web", "max_results": 2})]
+
+
 def test_color_follow_up_uses_prior_product_context(monkeypatch):
     from crew import dialogue
 

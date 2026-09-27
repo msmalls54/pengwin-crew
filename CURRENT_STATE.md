@@ -1,5 +1,13 @@
 # Pengwin Crew current state
 
+## September 27, 12:25 p.m. PDT stage preparation
+
+- Through Mike's signed-in Slack UI, Codex opened an Events thread for a free online "Pengwin Crew Event Test" on September 27, 1:00–1:30 p.m. PDT, capacity 20. Events returned an approval preview, but the stage time was unknown, so Codex sent `cancel this draft` in that thread; Events confirmed nothing was published. Its root is `1790537081.545919` in `#pengwin-ops`.
+- A replacement Events thread, root `1790537247.821679`, now has an exact pending preview for **Monday September 28, 2026, 5:00–5:30 p.m. PDT**, 20 free spots, online. The owner wants to perform the publish step on stage. **No approval was sent and no new Eventbrite event was published.** On stage, approve only this replacement thread with `@Pengwin Events approve this event`, then verify Eventbrite's live state and public RSVP URL. A new Jitsi room URL is in the private Slack draft; hosting a room on meet.jit.si requires a signed-in creator.
+- Two earlier assistant-operated creation prompts were misrouted to read-only Eventbrite status because the intent detector gave status words such as "live" and "RSVP" precedence over creation. Neither created a provider resource. A simpler creation prompt produced the draft. This routing defect remains unfixed in source and deployment; use the verified wording for the stage demonstration.
+- The existing October 2 Eventbrite event `2002368493065` was read back through the API at about 12:20 p.m. PDT as `live`, unlisted, capacity 40, with a free ticket class and zero tickets sold. Its public page returned HTTP 200. This is a separate event from the pending September 27 draft.
+- The owner wants five plain water bottles as prizes and suggested saying they are in a cart with basic branding. No vendor cart or checkout receipt exists for that request; Buyer can source specific plain bottles and propose a simple branding treatment, but a cart or applied branding must not be asserted until created and checked. The previously reviewed Printful custom-bottle range for five is $101.25–$117.05 before shipping/tax, above the build's $100 new-cash cap.
+
 Checked September 27, 2026 at about 11:50 a.m. PDT (18:50 UTC). This records observed behavior and separates source, deployment, provider readback, and remaining work. Read AGENTS.md and docs/demo-runbook.md before operating the demo.
 
 ## Latest agent research release (11:50 a.m. PDT)
