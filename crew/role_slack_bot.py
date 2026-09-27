@@ -61,6 +61,8 @@ def build_app(role: str) -> App:
             recent, memory.format_project_facts(project_facts, for_model=True))
         if claim.cached_reply:
             reply = claim.cached_reply
+        elif memory.is_project_role_detail_request(role, text):
+            reply = memory.format_project_role_details(role, project_facts)
         elif memory.is_project_recall_request(text):
             reply = memory.format_project_facts(project_facts)
         else:

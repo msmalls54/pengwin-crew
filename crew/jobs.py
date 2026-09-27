@@ -12,7 +12,7 @@ import json
 import os
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -610,15 +610,17 @@ def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
     if date_phrase and re.search(r"\b(?:about|around|roughly|approximately|next)\b.*\bmonth\b|\bin a month\b", date_phrase, re.I):
         local_day = datetime.now(ZoneInfo("America/Los_Angeles")).date() + timedelta(days=30)
         options = [(local_day + timedelta(days=offset)).isoformat() for offset in (0, 1, 2)]
+    draft_title = title if title != "Event" else "an event"
+    draft_date = "[select a date option]" if options else (date_phrase or "[date]")
     description = (
-        f"Join us for {title} at {venue or '[venue to confirm]'}. "
-        f"The date is {date_phrase or '[date to confirm]'} and the time is "
-        f"{time_phrase or '[time to confirm]'}. "
-        "We will share the final details after the venue and registration page are approved."
+        f"Join us for {draft_title} at {venue or '[venue]'}. "
+        f"Date: {draft_date}. Time: {time_phrase or '[start time]'}. "
+        "RSVP details will be added after the schedule and venue are confirmed."
     )
     invite_copy = (
-        f"You're invited to {title}. We are planning it for {date_phrase or '[date]'} "
-        f"at {venue or '[venue]'}. Reply if you would like the RSVP details once confirmed."
+        f"You're invited to {draft_title} at {venue or '[venue]'}. "
+        f"Date: {draft_date}. Time: {time_phrase or '[start time]'}. "
+        "RSVP: [approved registration link]."
     )
     venue_search = None
     route_search = None
@@ -639,46 +641,58 @@ def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
             place_query, kind="place", location=public_location, max_results=2,
         )
         route_search = lookup_project_facts(route_query, kind="web", max_results=2)
-    lines = [f"Event plan: {title}. This plan has not reserved a venue or published a new Eventbrite page."]
+    event_label = f"{title} at {venue}" if venue and venue.casefold() not in title.casefold() else (venue or title)
+    lines = [f"Event plan ready: {event_label}."]
     if options:
-        lines.append("Date options to confirm: " + ", ".join(options) + ".")
+        labels = [f"{date.fromisoformat(value):%a %b} {date.fromisoformat(value).day}, {date.fromisoformat(value).year}" for value in options]
+        lines.append("Date options: " + ", ".join(labels) + ".")
     elif date_phrase:
-        lines.append(f"Requested timing: {date_phrase}; please confirm an exact calendar date.")
-    else:
-        lines.append("I need an event date.")
-    if not time_phrase:
-        lines.append("I also need a start time and expected duration.")
-    if event and event.capacity is None:
-        lines.append("I need an RSVP capacity before drafting a publishable Eventbrite page.")
+        lines.append(f"Requested timing: {date_phrase}.")
     if venue_search and venue_search.status == "ok" and venue_search.results:
         leads = [f"{lead.title}: {lead.url}" for lead in venue_search.results if lead.url]
         if leads:
-            lines.append("Venue search leads (availability unverified): " + " | ".join(leads[:2]))
+            lines.append("Venue research: " + " | ".join(leads[:2]))
     if route_search and route_search.status == "ok" and route_search.results:
         leads = [f"{lead.title}: {lead.url}" for lead in route_search.results if lead.url]
         if leads:
-            lines.append("Possible reservation routes to verify with the venue: " + " | ".join(leads[:2]))
+            lines.append("Reservation leads: " + " | ".join(leads[:2]))
     if official_route:
         lines.append(
-            "Official Salesforce Park inquiry route (TJPA; reviewed 2026-09-27): "
+            "Official Salesforce Park permit inquiry (TJPA; checked 2026-09-27): "
             + official_route["url"]
-            + ". TJPA distinguishes ticketed/private events, group outings, and public "
-              "activations; confirm the right permit and availability with the operator. "
-              "No reservation has been requested."
+            + ". TJPA separates private events, group outings, and public activations."
         )
     if venue_search and venue_search.status != "ok":
         lines.append(
-            "Live venue search is unavailable; availability is not checked."
+            "Live venue search is unavailable; use the official permit route above."
             if official_route else
-            "Live venue search is unavailable; please share the park's city or official booking page."
+            "Live venue search is unavailable; share the venue's city or booking page."
         )
-    elif not venue:
-        lines.append("Which venue and city should I research?")
     lines.append("Draft description: " + description)
     if plan.invitations:
-        lines.append("Target audience: " + (audience or "please name the group you want to invite") + ".")
+        lines.append("Target audience: " + (audience or "to confirm") + ".")
         lines.append("Draft invitation: " + invite_copy)
-        lines.append("No mailing list was imported and no invitations were sent.")
+    needed = []
+    if not date_phrase and not options:
+        needed.append("event date")
+    elif date_phrase and not options and not re.search(r"\b\d{4}-\d{2}-\d{2}\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}\b", date_phrase, re.I):
+        needed.append("exact date")
+    elif options:
+        needed.append("one date option")
+    if not time_phrase:
+        needed.append("start time and duration")
+    if event and event.capacity is None:
+        needed.append("RSVP capacity")
+    if not venue:
+        needed.append("venue and city")
+    if plan.invitations and not audience:
+        needed.append("target audience")
+    if needed:
+        lines.append("Next: Confirm " + ", ".join(needed) + ".")
+    status = "Status: venue availability unconfirmed; no reservation has been requested or Eventbrite page published"
+    if plan.invitations:
+        status += "; invitations have not been sent"
+    lines.append(status + ".")
     output = {
         "venue_status": "UNCONFIRMED", "eventbrite_status": "NOT_CREATED",
         "invitation_status": "DRAFT_ONLY", "date_options": options,
@@ -713,12 +727,12 @@ def _project_product_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
         "subtotal_max": round(quantity * fact.max_price, 2) if quantity and fact.max_price is not None else None,
         "checkout_status": "NOT_READY",
     }
-    lines = ["Buyer sourced custom water bottles; no order or payment was placed."]
+    item = f"{quantity} custom water bottles" if quantity else "custom water bottles"
+    lines = [f"Checked a product source for {item}."]
     if fact.status == "ok":
-        lines.append(f"Printful's official product range is ${fact.min_price:.2f}–${fact.max_price:.2f} per bottle, checked {fact.checked_at:%Y-%m-%d %H:%M} UTC: {fact.source_url}")
+        lines.append(f"Printful catalog: ${fact.min_price:.2f}–${fact.max_price:.2f} per bottle (checked {fact.checked_at:%Y-%m-%d %H:%M} UTC): {fact.source_url}")
         if quantity:
-            lines.append(f"For {quantity}, product subtotal estimate: ${output['subtotal_min']:.2f}–${output['subtotal_max']:.2f}.")
-        lines.append("Shipping, tax, artwork, variant, stock, and the final checkout total are not quoted.")
+            lines.append(f"Product estimate for {quantity}: ${output['subtotal_min']:.2f}–${output['subtotal_max']:.2f}, before shipping and tax.")
         link_run_resource(run_id=run.id, role="Buyer", resource_type="publisher_product",
                           resource_id="printful-water-bottles", safe_facts={
                               "source_url": fact.source_url, "checked_at": output["checked_at"],
@@ -726,11 +740,11 @@ def _project_product_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
                               "unit_max": fact.max_price, "price_kind": output["price_kind"],
                           })
     else:
-        lines.append("The official product price could not be checked, so I have no current estimate.")
+        lines.append("Printful's current catalog price could not be checked, so I cannot give a current product estimate.")
     if search.status == "ok" and search.results:
         leads = [f"{lead.title}: {lead.url}" for lead in search.results if lead.url]
         if leads:
-            lines.append("Other search leads (not verified quotes): " + " | ".join(leads[:2]))
+            lines.append("Other product leads (not checkout quotes): " + " | ".join(leads[:2]))
     elif search.status != "ok":
         lines.append("Broader live product search is unavailable.")
     missing = []
@@ -738,9 +752,9 @@ def _project_product_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
         missing.append("quantity")
     if not plan.swag.design_phrase:
         missing.append("print-ready artwork")
-    missing.extend(("exact product variant", "delivery destination", "landed checkout total"))
-    lines.append("For a checkout handoff, I still need " + ", ".join(missing) + ".")
-    lines.append("A later exact handoff will need fresh Slack approval if the quantity or price changes.")
+    missing.extend(("exact product variant", "delivery destination"))
+    lines.append("Next: Confirm " + ", ".join(missing) + "; I'll prepare a shipping-and-tax-inclusive checkout for exact Slack approval.")
+    lines.append("Status: " + ("product estimate" if fact.status == "ok" else "research") + " only; no checkout submitted.")
     return output, "\n".join(lines)[:3000]
 
 
@@ -749,7 +763,11 @@ def _project_budget_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
     from .project_planner import ProjectPlan
 
     plan = ProjectPlan.model_validate(plan_data)
-    reason = f"Water bottles and event planning for {plan.event.title if plan.event else plan.name}"
+    event_name = plan.event.title if plan.event and plan.event.title != "Event" else plan.name
+    if plan.event and plan.event.venue_name and plan.event.venue_name.casefold() not in event_name.casefold():
+        event_name += f" at {plan.event.venue_name}"
+    purpose = "Water bottles and event planning" if plan.swag else "Event planning"
+    reason = f"{purpose} for {event_name}"
     with SessionLocal() as session:
         budget = session.execute(select(Budget).where(
             Budget.office_id == "SF", Budget.category == "swag",
@@ -769,16 +787,20 @@ def _project_budget_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
         "internal_demo_budget_room_cents": room_cents, "over_internal_budget": over_budget,
         "payment_status": "NONE", "reserved_cents": 0,
     }
-    lines = [f"Treasurer recorded the purpose: {reason}."]
+    lines = [f"Budget review recorded for {reason}."]
     if high is not None:
-        lines.append(f"The current product-only estimate is ${low:.2f}–${high:.2f}; shipping and tax remain unknown.")
+        lines.append(f"Product estimate: ${low:.2f}–${high:.2f}, before shipping and tax.")
         if over_budget:
-            lines.append("The high end exceeds the internal demo swag allocation. We need a revised plan.")
+            lines.append(f"Recorded swag allocation has ${room_cents / 100:,.2f} available; the high estimate exceeds it. Reduce the quantity or revise the allocation.")
+        elif room_cents is None:
+            lines.append("There is no recorded swag allocation to compare against this estimate.")
         else:
-            lines.append("The product estimate fits the internal demo swag allocation, but this is not checkout approval.")
+            lines.append(f"Recorded swag allocation has ${room_cents / 100:,.2f} available; this product-only estimate fits.")
     else:
-        lines.append("I cannot assess an amount until Buyer has a current quote and quantity.")
-    lines.append("No funds were reserved, no sandbox transfer was submitted, and no real payment was made.")
+        lines.append("Buyer needs a current product price and quantity before I can assess the amount."
+                     if plan.swag else "No product amount is ready for review; event costs need an itemized estimate.")
+    lines.append("Next: Bring me the exact checkout total, including shipping and tax, for approval against this purpose."
+                 if plan.swag else "Next: Share an itemized event cost before requesting budget approval.")
     link_run_resource(run_id=run.id, role="Treasurer", resource_type="budget_review",
                       resource_id="swag-review", safe_facts=output)
     return output, "\n".join(lines)[:2000]
@@ -826,9 +848,7 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
             if plan.swag is not None:
                 successors.append(("Buyer", "product_source", {"plan": plan_data}))
             successors.append(("Treasurer", "budget_review", {"plan": plan_data}))
-            return plan_data, successors, (
-                project_plan_summary(plan) + "\nEvents, Buyer, and Treasurer are checking their parts now."
-            ), False
+            return plan_data, successors, project_plan_summary(plan), False
         if run.flow == "code-task":
             return {}, [("Buyer", "code_execute", {"goal": data["text"]})], (
                 "Buyer is running the code in a fresh, isolated workspace. "

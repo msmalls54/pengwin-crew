@@ -42,16 +42,16 @@
         </div>
         <p class="flow-boundary"><strong>Review point:</strong> The crew prepared research, drafts, and an estimate. No park reservation, bottle order, payment, or invitation send has been claimed.</p>
       </section>
-      <section class="judge-board" id="judge-proof" aria-label="Public judge activity">
-        <div class="judge-heading"><div><span class="eyebrow">PUBLIC EVIDENCE</span><h2>What Pengwin recorded</h2><p>A sanitized, read-only activity trail shows which role acted, what it produced, and how estimates differ from actual charges. It does not refresh provider status.</p></div><span id="activity-connection" class="activity-connection">Loading activity</span></div>
+      <section class="judge-board" id="judge-proof" aria-label="Saved project and agent work">
+        <div class="judge-heading"><div><span class="eyebrow">SAVED PROJECT · READ ONLY</span><h2>What the crew remembers</h2><p>This is a public, privacy-safe view of one recorded event project. It shows saved facts and completed agent work; conversations and contact details stay in Slack.</p></div><span id="activity-connection" class="activity-connection">Loading saved work</span></div>
+        <div id="project-memory" class="project-memory empty-view">Loading the saved event project.</div>
         <div class="judge-grid">
-          <section class="card judge-activity"><div class="card-head"><h3>Activity and evidence</h3><span>Latest recorded steps</span></div><div id="judge-timeline" class="judge-timeline empty-view">Loading the activity trail.</div></section>
+          <section class="card judge-activity"><div class="card-head"><h3>What each agent recorded</h3><span>From this project</span></div><div id="judge-timeline" class="judge-timeline empty-view">Loading project steps.</div></section>
           <div class="judge-stack">
-            <section class="card"><h3>Latest task states</h3><div id="judge-runs" class="judge-runs empty-view">Loading task status.</div></section>
-            <section class="card"><h3>Costs and estimates</h3><div id="judge-spend" class="judge-spend empty-view">Loading spending labels.</div></section>
-            <section class="card"><h3>Vultr model usage</h3><div id="judge-model" class="judge-model empty-view">Loading usage count.</div></section>
+            <section class="card"><h3>Budget decision</h3><div id="judge-spend" class="judge-spend empty-view">Loading the event estimate.</div></section>
           </div>
         </div>
+        <details class="technical-archive"><summary>Other recorded activity and system usage</summary><p>Older tests and separate projects are shown here for audit context. They are not part of the event plan above.</p><div class="archive-grid"><section class="card"><h3>Recent system activity</h3><div id="judge-all-activity" class="judge-timeline empty-view">Loading activity.</div></section><div class="judge-stack"><section class="card"><h3>Latest task states</h3><div id="judge-runs" class="judge-runs empty-view">Loading task status.</div></section><section class="card"><h3>Other estimates and transfers</h3><div id="judge-spend-history" class="judge-spend empty-view">Loading totals.</div></section><section class="card"><h3>Vultr model usage</h3><div id="judge-model" class="judge-model empty-view">Loading usage count.</div></section></div></div></details>
       </section>
       <section class="sandbox-section" id="sandbox" aria-labelledby="sandbox-title">
         <div class="section-heading"><div><span class="eyebrow">CHALLENGE 1 · SAFE EXECUTION</span><h2 id="sandbox-title">Prove the crew can run and contain code</h2><p>This separate judge test shows Vultr-generated Python running in a disposable container. You can inspect the code, output, and ten-second timeout result. The code container has no network access or office credentials.</p></div><span class="section-aside">Protected interactive demo</span></div>

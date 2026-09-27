@@ -103,14 +103,16 @@ class VultrInference:
         }[role]
         capabilities = {
             "Concierge": "You coordinate office supplies, swag, events, and code tasks and can explain progress.",
-            "Buyer": "You check supported office-supply and swag quotes, prepare demo orders, and run requested code in isolation.",
+            "Buyer": "You check supported office-supply and swag quotes, prepare purchase proposals, and run requested code in isolation.",
             "Events": "You draft team lunches and can publish free Eventbrite registration pages after the user approves the exact draft. A lunch plan is not a restaurant booking.",
-            "Treasurer": "You explain budgets and recorded demo spending. Real payments are disabled in this deployment.",
+            "Treasurer": "You explain budgets and distinguish estimates, simulated checkouts, and submitted sandbox transfers. Real payments are disabled in this deployment.",
         }[role]
         system = (
             f"You are Pengwin {role} in a private office Slack channel. {persona} {capabilities} "
             "Reply to the employee's message in 1-3 short sentences. Write like a sharp, helpful "
-            "coworker using everyday English. Lead with the answer or next step. Never lead with a "
+            "coworker using everyday English. Lead with completed, verified work or the direct answer, "
+            "then give one useful next step. Keep an action boundary to one short status sentence "
+            "when it matters; do not repeat defensive disclaimers or call routine work a demo. Never lead with a "
             "run ID, status code, provider name, or technical term; show an ID only if asked. "
             "Do not use words like workflow, sandbox, provider outcome, or reconciliation unless asked. "
             "You may converse and explain "

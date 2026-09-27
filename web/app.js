@@ -15,7 +15,8 @@ const statusWords = {
   QUEUED:'Requested',RUNNING:'In progress',WAITING_APPROVAL:'Awaiting human approval',
   COMPLETE:'Completed',DONE:'Completed',FAILED:'Failed',HELD:'Held for review',REJECTED:'Rejected',
   queued:'Requested',complete:'Recorded',proposed:'Proposed',approved:'Approved',blocked:'Blocked',
-  reserved:'Reserved',submitted:'Submitted',simulated:'Simulated',contained:'Contained',failed:'Failed',held:'Held for review'
+  reserved:'Reserved',submitted:'Submitted',simulated:'Simulated',contained:'Contained',failed:'Failed',held:'Held for review',
+  completed:'Completed',pending:'Pending',in_progress:'In progress'
 };
 
 function node(tag, className, text) {
@@ -63,7 +64,7 @@ function render(state) {
 }
 
 function renderJudge(data) {
-  $('activity-connection').textContent=`● Read only · updated ${readableTime(data.as_of)}`;
+  $('activity-connection').textContent=`● Read only · read at ${readableTime(data.as_of)}`;
   const proof=data.historical_containment;
   const proofBox=$('judge-containment');
   if(proof?.status==='contained'){
@@ -81,18 +82,57 @@ function renderJudge(data) {
     proofBox.classList.add('empty-view');
     proofBox.replaceChildren(node('p','','No verified containment receipt has been recorded yet.'));
   }
-  const events=data.activity||[];
-  $('judge-timeline').classList.toggle('empty-view',events.length===0);
-  $('judge-timeline').replaceChildren(...(events.length ? events.map(event=>{
+  const renderEvents=(target,events,emptyText)=>{
+    target.classList.toggle('empty-view',events.length===0);
+    target.replaceChildren(...(events.length ? events.map(event=>{
     const item=node('article',`judge-event ${event.status}`);
     const top=node('div','judge-event-top');
-    const timestamp=node('time','',readableTime(event.ts)); timestamp.dateTime=event.ts;
-    top.append(node('strong','',event.role),timestamp);
+    const when=event.recorded_at||event.ts;
+    top.append(node('strong','',event.role));
+    if(when){const timestamp=node('time','',readableTime(when)); timestamp.dateTime=when;top.append(timestamp);}
     const line=node('div','judge-event-title');
     line.append(node('span','',event.title),node('span',`proof-status ${event.status}`,statusWords[event.status]||'Recorded'));
     item.append(top,line,node('p','judge-proof',event.evidence));
     return item;
-  }) : [node('p','','No recorded activity is available yet.')]));
+    }) : [node('p','',emptyText)]));
+  };
+
+  const featured=data.featured_project;
+  const memoryBox=$('project-memory');
+  if(featured){
+    memoryBox.classList.remove('empty-view');
+    const head=node('div','project-memory-head');
+    head.append(node('div','',featured.title),node('span','proof-status complete','Saved in project memory'));
+    const details=node('p','project-memory-meta',`Saved ${readableTime(featured.saved_at)} · latest project update ${readableTime(featured.updated_at)} · ${featured.revision_count} linked ${featured.revision_count===1?'run':'runs'}`);
+    const facts=node('div','project-facts');
+    const event=featured.event||{};
+    const dates=event.date_options?.length ? event.date_options.map(value=>readableTime(`${value}T12:00:00Z`).split(',')[0]).join(' / ') : 'Dates to confirm';
+    const venue=node('article','project-fact');
+    venue.append(node('span','fact-label','Event'),node('strong','',`Salesforce Park · ${dates}`),node('p','','Venue availability still needs confirmation.'));
+    if(event.inquiry_url==='https://www.tjpa.org/permits-reservations'){
+      const link=node('a','source-link','Official permit inquiry ↗');
+      link.href=event.inquiry_url; link.target='_blank'; link.rel='noopener noreferrer'; venue.append(link);
+    }
+    const invites=node('article','project-fact');
+    invites.append(node('span','fact-label','Invitations'),node('strong','',event.invitation_status==='draft_only'?'Copy drafted':'Copy pending'),
+      node('p','','Confirm audience, capacity, and RSVP details before sending.'));
+    const buyer=featured.buyer||{};
+    const bottles=node('article','project-fact');
+    bottles.append(node('span','fact-label','Supplies'),node('strong','',buyer.quantity?`${buyer.quantity} water bottles`:'Quantity pending'),
+      node('p','','Choose exact product, artwork, and destination for a checkout quote.'));
+    const treasury=featured.treasury||{};
+    const budget=node('article','project-fact');
+    budget.append(node('span','fact-label','Budget review'),node('strong','',treasury.review_status==='estimate_only'?'Product estimate reviewed':'Review pending'),
+      node('p','','Final shipping, tax, and checkout total need review.'));
+    facts.append(venue,invites,bottles,budget);
+    memoryBox.replaceChildren(head,details,facts,node('p','memory-boundary','This is the latest saved revision. The private Slack conversation and recipient list are not published here.'));
+    renderEvents($('judge-timeline'),featured.steps||[],'No completed work is saved for this project yet.');
+  } else {
+    memoryBox.classList.add('empty-view');
+    memoryBox.replaceChildren(node('p','','No public project snapshot is configured. The recorded example above remains a reviewed demonstration.'));
+    renderEvents($('judge-timeline'),[],'No featured project steps are available.');
+  }
+  renderEvents($('judge-all-activity'),data.activity||[],'No other activity is recorded.');
 
   const runs=data.runs||[];
   $('judge-runs').classList.toggle('empty-view',runs.length===0);
@@ -112,7 +152,7 @@ function renderJudge(data) {
     ['Simulated checkouts',data.spend?.simulated_checkouts||[],'Recorded locally; no real charge.'],
     ['Sandbox transfers submitted',data.spend?.submitted_sandbox_transfers||[],'Submission is recorded; settlement is unconfirmed.']
   ];
-  $('judge-spend').classList.remove('empty-view');
+  $('judge-spend-history').classList.remove('empty-view');
   const spendItems=groups.map(([label,amounts,description])=>{
     const item=node('div','spend-row');
     const values=amounts.length ? amounts.map(entry=>`${money(entry.amount_cents,entry.currency)} (${entry.count})`).join(' · ') : 'None recorded';
@@ -137,12 +177,26 @@ function renderJudge(data) {
     estimateItem.append(node('span','spend-value','No verified range recorded'),
       node('small','','A search result alone is not a product price or checkout quote.'));
   }
-  spendItems.unshift(estimateItem);
+  if(!featured) spendItems.unshift(estimateItem);
   const realItem=node('div','spend-row real-spend');
   realItem.append(node('strong','','Real settled spend'),node('span','spend-value','Not verified here'),
     node('small','','Pengwin has no production settlement ledger. These figures do not represent a bank balance.'));
   spendItems.push(realItem);
-  $('judge-spend').replaceChildren(...spendItems);
+  $('judge-spend-history').replaceChildren(...spendItems);
+
+  const decision=$('judge-spend');
+  decision.classList.toggle('empty-view',!featured?.buyer);
+  const savedBuyer=featured?.buyer;
+  if(savedBuyer?.subtotal_min_cents!==null && savedBuyer?.subtotal_min_cents!==undefined &&
+     savedBuyer?.subtotal_max_cents!==null && savedBuyer?.subtotal_max_cents!==undefined){
+    const amount=node('div','budget-decision-amount',`${money(savedBuyer.subtotal_min_cents,'USD')}–${money(savedBuyer.subtotal_max_cents,'USD')}`);
+    const label=node('p','budget-decision-label',`Product estimate for ${savedBuyer.quantity} bottles, checked ${readableTime(savedBuyer.checked_at)}.`);
+    const next=node('p','budget-decision-next','Next: get the exact variant, artwork, shipping, tax, and landed checkout total for approval.');
+    const status=node('p','budget-decision-status',`Treasurer: ${featured.treasury?.review_status==='estimate_only'?'estimate reviewed':'review pending'} · checkout ${savedBuyer.checkout_status==='not_ready'?'not ready':'status unknown'}.`);
+    decision.replaceChildren(amount,label,next,status);
+  } else {
+    decision.replaceChildren(node('p','','A project-specific estimate is not available yet.'));
+  }
 
   const usage=data.model_usage||{};
   $('judge-model').classList.remove('empty-view');

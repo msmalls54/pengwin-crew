@@ -18,6 +18,8 @@ class Settings:
     admin_token: str = os.getenv("ADMIN_TOKEN", "")
     web_demo_token: str = os.getenv("WEB_DEMO_TOKEN", "")
     public_judge_feed: bool = os.getenv("PUBLIC_JUDGE_FEED", "false").lower() == "true"
+    public_demo_project_id: str = os.getenv("PUBLIC_DEMO_PROJECT_ID", "").strip()
+    public_demo_owner_user_id: str = os.getenv("PUBLIC_DEMO_OWNER_USER_ID", "").strip()
     freeze: bool = os.getenv("FREEZE", "false").lower() == "true"
     vultr_key: str = os.getenv("VULTR_INFERENCE_KEY", "")
     vultr_model: str = os.getenv("VULTR_MODEL", "")

@@ -48,15 +48,41 @@ def test_project_plan_keeps_stated_details_and_removes_invented_ones():
     assert checked.event.date_phrase == "Oct 2"
     assert checked.event.venue_name == "Salesforce Park"
     assert checked.event.time_phrase is None
-    assert checked.event.capacity is None  # 30 was tied to bottles, not guests.
-    assert checked.swag.quantity is None  # 50 was tied to guests, not bottles.
+    assert checked.event.capacity == 50  # 30 was tied to bottles; 50 guests was explicit.
+    assert checked.swag.quantity == 30  # 50 was tied to guests; 30 bottles was explicit.
     assert checked.swag.design_phrase is None
     assert checked.invitations.emails == []
     assert checked.invitations.audience_phrase == "the team"
-    assert {"event_capacity", "bottle_quantity"} <= {item.code for item in checked.missing}
+    assert "bottle_quantity" not in {item.code for item in checked.missing}
+    assert "event_capacity" not in {item.code for item in checked.missing}
     summary = project_plan_summary(checked)
     assert "No venue" not in summary  # Specific wording is about this plan's actions.
-    assert "has not reserved" in summary and "None have been sent" in summary
+    assert "Saved the plan" in summary
+    assert "no venue booking" in summary and "invitation send" in summary
+
+
+def test_meetup_brief_preserves_stated_headcount_start_and_duration():
+    request = (
+        "Plan a meetup for 30 local AI founders at Salesforce Park about a month "
+        "from now, starting around 5 p.m. for 90 minutes. Draft invitation copy, "
+        "source 24 custom water bottles, and have Treasurer review the budget."
+    )
+    proposal = ProjectPlan(
+        name="Meetup", event=EventProposal(
+            title="Meetup", date_phrase="about one month from now",
+            time_phrase="5:00 PM", venue_name="Salesforce Park", capacity=30,
+        ),
+        swag=SwagProposal(quantity=24),
+        invitations=InvitationProposal(audience_phrase="local AI founders"),
+    )
+    checked = checked_project_plan(proposal, request)
+    assert checked.event.date_phrase == "about a month from now"
+    assert checked.event.time_phrase == "starting around 5 p.m. for 90 minutes"
+    assert checked.event.capacity == 30
+    assert checked.event.venue_name == "Salesforce Park"
+    assert checked.swag.quantity == 24
+    assert checked.invitations.audience_phrase == "local AI founders"
+    assert "event_capacity" not in {item.code for item in checked.missing}
 
 
 def test_model_json_wrappers_still_require_typed_proposals(tmp_path):

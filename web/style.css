@@ -72,6 +72,15 @@ h3{font-size:17px;line-height:1.2}
 .flow-boundary strong{color:#244c45}
 .judge-board{background:#edf3f0;border:1px solid #e0eae4;border-radius:22px;padding:clamp(22px,3vw,36px);margin-bottom:64px}
 .activity-connection{display:inline-flex;align-items:center;border:1px solid #c7ddd3;background:#e1f0e9;color:#28634c;border-radius:999px;padding:8px 11px;font-size:11px;white-space:nowrap}
+.project-memory{background:#fff;border:1px solid #cbded6;border-radius:16px;padding:22px;margin-bottom:16px}
+.project-memory-head{display:flex;align-items:center;justify-content:space-between;gap:14px;font-size:22px;font-weight:800;letter-spacing:-.03em}
+.project-memory-meta{font-size:12px;margin:7px 0 16px;color:#6b8081}
+.project-facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.project-fact{border:1px solid #e1eae5;border-radius:10px;background:#f8fbf9;padding:15px;min-height:150px}
+.project-fact .fact-label{display:block;color:#32736b;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-weight:850;margin-bottom:8px}
+.project-fact strong{display:block;font-size:15px;line-height:1.3}
+.project-fact p{font-size:12px;margin:9px 0 5px}
+.memory-boundary{font-size:11px;margin:14px 0 0;color:#697f7e}
 .judge-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(310px,.7fr);gap:16px}
 .judge-stack{display:grid;gap:16px;align-content:start}
 .card{background:#fff;border:1px solid #dbe6e3;border-radius:14px;padding:22px}
@@ -109,9 +118,17 @@ h3{font-size:17px;line-height:1.2}
 .estimate-row .spend-value{color:#655181}
 .real-spend .spend-value{color:#866442}
 .source-link{color:#326c77;font-size:11px;font-weight:750}
+.budget-decision-amount{font-size:26px;font-weight:850;letter-spacing:-.04em;color:#234e4b}
+.budget-decision-label{font-size:12px;margin:6px 0 12px}
+.budget-decision-next{font-size:13px;color:#2e4f51;font-weight:650;margin:0 0 12px}
+.budget-decision-status{font-size:11px;color:#708486;border-top:1px solid #e4ece8;padding-top:10px;margin:0}
 .model-count{font-size:28px;font-weight:850;color:#246962;letter-spacing:-.04em}
 .judge-model p{font-size:12px;margin:6px 0 0}
 .judge-model .model-cost{color:#846637}
+.technical-archive{margin-top:18px;border-top:1px solid #d3e2da;padding-top:16px}
+.technical-archive summary{cursor:pointer;color:#355e5c;font-size:13px;font-weight:750}
+.technical-archive>p{font-size:12px;margin:10px 0}
+.archive-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(310px,.7fr);gap:16px;margin-top:14px}
 .sandbox-section{background:#eaf0f2;border:1px solid #d6e2e5;border-radius:22px;padding:clamp(22px,3vw,36px);margin-bottom:40px}
 .historical-containment{margin-bottom:16px;border-color:#d8dce7;background:#fafbfe}
 .historical-containment .card-head{margin-bottom:8px}
@@ -188,7 +205,8 @@ footer{border-top:1px solid #dce6e1;padding:28px 0 36px;color:#77908d;font-size:
 @media(max-width:900px){
   .hero{grid-template-columns:1fr;padding:52px 0;gap:28px}
   .scenario-card{max-width:660px}
-  .judge-grid,.sandbox-grid,.operator-grid{grid-template-columns:1fr}
+  .judge-grid,.archive-grid,.sandbox-grid,.operator-grid{grid-template-columns:1fr}
+  .project-facts{grid-template-columns:repeat(2,minmax(0,1fr))}
   .section-heading,.judge-heading{align-items:flex-start}
   .section-aside{display:none}
 }
@@ -205,6 +223,8 @@ footer{border-top:1px solid #dce6e1;padding:28px 0 36px;color:#77908d;font-size:
   .role-card{min-height:0}
   .recorded-example{padding-bottom:48px}
   .judge-board,.sandbox-section{padding:18px;margin-left:-4px;margin-right:-4px}
+  .project-facts{grid-template-columns:1fr}
+  .project-memory-head{align-items:flex-start;flex-direction:column}
   .judge-event-title,.judge-event-top,.judge-run-head{align-items:flex-start;flex-direction:column;gap:6px}
   .judge-event .proof-status{align-self:flex-start}
   .activity-connection{white-space:normal;margin-top:12px}

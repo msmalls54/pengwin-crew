@@ -13,7 +13,7 @@ import os
 import re
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import or_, select, update
@@ -412,6 +412,20 @@ def _fact_date(value: object) -> str | None:
         return None
 
 
+def _fact_date_options(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    options = []
+    for item in value[:3]:
+        if not isinstance(item, str):
+            continue
+        try:
+            options.append(date.fromisoformat(item).isoformat())
+        except ValueError:
+            continue
+    return options
+
+
 def _json_object(raw: str) -> dict:
     if not isinstance(raw, str) or len(raw) > 50_000:
         return {}
@@ -493,6 +507,7 @@ def latest_project_facts(*, user_id: str, channel_id: str,
                 "time": _fact_label(event_plan.get("time_phrase"), limit=80),
                 "venue": _fact_label(event_plan.get("venue_name")),
                 "capacity": _fact_count(event_plan.get("capacity")),
+                "date_options": _fact_date_options(event_work.get("date_options")),
                 "venue_status": "UNCONFIRMED" if event_work.get("venue_status") == "UNCONFIRMED" else "NOT_CONFIRMED",
                 "rsvp_status": "NOT_CREATED" if event_work.get("eventbrite_status") == "NOT_CREATED" else "UNVERIFIED",
                 "official_inquiry_url": ("https://www.tjpa.org/permits-reservations"
@@ -500,6 +515,7 @@ def latest_project_facts(*, user_id: str, channel_id: str,
             } if event_plan else None),
             "invitations": ({
                 "status": "DRAFT_ONLY" if event_work.get("invitation_status") == "DRAFT_ONLY" else "DRAFT_PENDING",
+                "draft": _fact_label(event_work.get("invitation_draft"), limit=400),
             } if invite_plan else None),
             "swag": ({
                 "quantity": _fact_count(swag_plan.get("quantity")),
@@ -518,6 +534,8 @@ def latest_project_facts(*, user_id: str, channel_id: str,
                 "review_status": "ESTIMATE_ONLY" if budget_work.get("review_status") == "ESTIMATE_ONLY" else "PENDING",
                 "product_subtotal_min": _fact_number(budget_work.get("product_subtotal_min")),
                 "product_subtotal_max": _fact_number(budget_work.get("product_subtotal_max")),
+                "budget_room_cents": _fact_number(budget_work.get("internal_demo_budget_room_cents")),
+                "over_budget": budget_work.get("over_internal_budget") is True,
                 "payment_status": "NONE_IN_PROJECT_REVIEW" if budget_work.get("payment_status") == "NONE" else "UNVERIFIED",
                 "reserved_cents": 0 if budget_work.get("reserved_cents") == 0 else None,
             } if linked else None),
@@ -528,24 +546,22 @@ def format_project_facts(facts: dict | None, *, for_model: bool = False) -> str:
     """Produce a short role-neutral recap, with research and payment boundaries."""
     if facts is None:
         return "I don't see a saved project for you in this channel." if not for_model else ""
-    lines = [f"Latest saved project: {facts['name']}."]
+    lines = [f"Saved project: {facts['name']}."]
     if facts.get("run_status") in {"QUEUED", "RUNNING"}:
-        lines.append("The latest revision is still being worked on; completed facts below may be pending.")
+        lines.append("The latest revision is in progress; completed details below may change.")
     event = facts.get("event")
     if event:
         details = ", ".join(str(value) for value in (
             event.get("date"), event.get("time"), event.get("venue")
         ) if value)
-        lines.append(f"Events: {event['title']}" + (f" ({details})" if details else "") +
-                     ". Venue availability and booking are unconfirmed; no new RSVP page is verified for this plan.")
+        lines.append(f"Events: {event['title']}" + (f" ({details})" if details else "") + ".")
         if event.get("official_inquiry_url"):
-            lines.append("Official venue inquiry route: TJPA permits page "
-                         f"{event['official_inquiry_url']} (availability unchecked; no reservation).")
+            lines.append("Official permit inquiry: " + event["official_inquiry_url"] + ".")
     invites = facts.get("invitations")
     if invites:
-        lines.append("Invitations: draft only; no sending is recorded by this project workflow."
+        lines.append("Invitations: draft only; copy is ready for review."
                      if invites.get("status") == "DRAFT_ONLY" else
-                     "Invitations: drafting is pending; no sending is recorded by this project workflow.")
+                     "Invitations: drafting is pending.")
     swag = facts.get("swag")
     if swag:
         quantity = swag.get("quantity")
@@ -562,17 +578,135 @@ def format_project_facts(facts: dict | None, *, for_model: bool = False) -> str:
                 lines.append(f"Catalog source: {swag['source_url']}.")
         else:
             lines.append(f"Buyer: {item}; no current official product range is saved for this revision.")
-        lines.append("Checkout is not ready; shipping, tax, artwork, variant, stock, and final total are unquoted.")
+        lines.append("Checkout is not ready: artwork, variant, destination, shipping, tax, and final total need review.")
     treasury = facts.get("treasury")
     if treasury:
         if treasury.get("review_status") == "ESTIMATE_ONLY":
-            lines.append("Treasurer: estimate review only, with no checkout approval.")
+            lines.append("Treasurer: estimate review only; exact checkout approval is next.")
         else:
             lines.append("Treasurer: review is pending for this revision.")
-        if treasury.get("payment_status") == "NONE_IN_PROJECT_REVIEW" and treasury.get("reserved_cents") == 0:
-            lines.append("The project review records no funds reserved or payment action; provider payment reconciliation is separate.")
+    next_steps = []
+    if event:
+        if not event.get("date"):
+            next_steps.append("event date")
+        if not event.get("time"):
+            next_steps.append("start time")
+        if invites and not event.get("capacity"):
+            next_steps.append("RSVP capacity")
+    if swag:
+        next_steps.append("bottle artwork, variant, and delivery destination")
+    if next_steps:
+        lines.append("Next: confirm " + "; ".join(next_steps) + ".")
+    status = []
+    if event:
+        status.append("Venue availability and booking are unconfirmed")
+        status.append("RSVP page not created" if event.get("rsvp_status") == "NOT_CREATED" else "RSVP status unverified")
+    if invites:
+        status.append("invitations not sent by this workflow")
+    if treasury and treasury.get("payment_status") == "NONE_IN_PROJECT_REVIEW" and treasury.get("reserved_cents") == 0:
+        status.append("no funds reserved or payment action in this project workflow")
+    if status:
+        lines.append("Status: " + "; ".join(status) + ".")
     prefix = "OWNER-SCOPED SAVED PROJECT FACTS (not spending or booking approval):\n" if for_model else ""
     return (prefix + "\n".join(lines))[:1_500]
+
+
+def is_project_role_detail_request(role: str, text: str) -> bool:
+    """Route read-only questions about completed role work before generic chat."""
+    value = " ".join(text.casefold().split())
+    if re.search(r"\b(?:approve|buy|order|pay|send|transfer|book|reserve|publish)\b", value):
+        return False
+    if not re.search(r"\b(?:show|what|which|review|does|how|remind)\b", value):
+        return False
+    if role == "Events":
+        return bool(re.search(r"\b(?:date options?|venue inquiry|reservation route|invitation draft|invite copy)\b", value))
+    if role == "Buyer":
+        return bool(re.search(r"\b(?:bottles?|product estimate|checkout.ready quote)\b", value)
+                    and re.search(r"\b(?:source|sourced|estimate|quote|checkout)\b", value))
+    if role == "Treasurer":
+        if re.search(r"\b(?:spent|spend|paid|payment|charges?|reserved|funds)\b", value):
+            return False
+        return bool(re.search(r"\b(?:bottles?|swag|meetup|project)\b", value)
+                    and re.search(r"\b(?:estimate|budget|allocation|fit)\b", value))
+    return False
+
+
+def format_project_role_details(role: str, facts: dict | None) -> str:
+    """Answer from the latest completed, owner-scoped project jobs only."""
+    if facts is None:
+        return "I don't see a saved project for you in this channel."
+    if role == "Events":
+        event = facts.get("event")
+        if not event:
+            return "I don't see completed event planning for this project yet."
+        title = event["title"] if event["title"] != "Event" else facts["name"]
+        lines = [f"For {title}, here is the saved event work:"]
+        options = event.get("date_options") or []
+        if options:
+            labels = [f"{date.fromisoformat(value):%a %b} {date.fromisoformat(value).day}, {date.fromisoformat(value).year}"
+                      for value in options]
+            lines.append("Date options: " + ", ".join(labels) + ".")
+        elif event.get("date"):
+            lines.append("Requested timing: " + event["date"] + ".")
+        if event.get("official_inquiry_url"):
+            lines.append("Official venue inquiry: " + event["official_inquiry_url"] + ".")
+        else:
+            lines.append("No official venue inquiry route is saved for this revision.")
+        invitations = facts.get("invitations") or {}
+        if invitations.get("draft"):
+            lines.append("Invitation draft: " + invitations["draft"])
+        next_steps = []
+        if options:
+            next_steps.append("choose one date")
+        elif not event.get("date"):
+            next_steps.append("confirm a date")
+        if not event.get("time"):
+            next_steps.append("confirm the start time and duration")
+        if invitations and not event.get("capacity"):
+            next_steps.append("set RSVP capacity")
+        if next_steps:
+            lines.append("Next: " + "; ".join(next_steps) + ".")
+        lines.append("Status: venue availability is unconfirmed; no reservation or Eventbrite publication for this plan.")
+        return "\n".join(lines)[:1_500]
+    if role == "Buyer":
+        swag = facts.get("swag")
+        if not swag:
+            return "I don't see bottle sourcing for this project yet."
+        quantity = swag.get("quantity")
+        item = f"{quantity} custom water bottles" if quantity else "custom water bottles"
+        lines = [f"I checked a product source for {item}."]
+        if (swag.get("publisher_status") == "ok" and swag.get("currency") == "USD"
+                and swag.get("unit_min") is not None and swag.get("unit_max") is not None):
+            lines.append(f"Printful catalog: ${swag['unit_min']:.2f}–${swag['unit_max']:.2f} per bottle.")
+            if swag.get("subtotal_min") is not None and swag.get("subtotal_max") is not None:
+                lines.append(f"Product estimate: ${swag['subtotal_min']:.2f}–${swag['subtotal_max']:.2f}, before shipping and tax.")
+            if swag.get("source_url"):
+                lines.append("Source: " + swag["source_url"] + ".")
+        else:
+            lines.append("No current official product price is saved for this revision.")
+        lines.append("Next: Send print-ready artwork, choose the bottle variant, and confirm the delivery destination. I'll bring back an exact checkout total for approval.")
+        lines.append("Status: catalog estimate only; no checkout submitted.")
+        return "\n".join(lines)[:1_500]
+    if role == "Treasurer":
+        treasury = facts.get("treasury")
+        if not treasury or treasury.get("review_status") != "ESTIMATE_ONLY":
+            return "The budget review for this project is still pending."
+        swag = facts.get("swag") or {}
+        item = f"{swag['quantity']} water bottles" if swag.get("quantity") else "the water bottles"
+        lines = [f"I reviewed {item} for {facts['name']}."]
+        low = treasury.get("product_subtotal_min")
+        high = treasury.get("product_subtotal_max")
+        if low is not None and high is not None:
+            lines.append(f"Product estimate: ${low:.2f}–${high:.2f}, before shipping and tax.")
+            room = treasury.get("budget_room_cents")
+            if room is not None:
+                judgment = "exceeds" if treasury.get("over_budget") else "fits within"
+                lines.append(f"This product-only estimate {judgment} the ${room / 100:,.2f} available in the recorded swag allocation.")
+        else:
+            lines.append("No current product estimate is saved for this revision.")
+        lines.append("Next: Bring the exact checkout total, including shipping and tax, for approval against this purpose.")
+        return "\n".join(lines)[:1_500]
+    raise ValueError("Unknown project role")
 
 
 def combine_context(recent_turns: str, project_facts: str) -> str:

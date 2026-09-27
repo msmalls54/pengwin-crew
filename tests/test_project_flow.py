@@ -64,15 +64,32 @@ assert jobs.run_one_job("Treasurer")
 run = jobs.get_run(run_id)
 assert run["status"] == "COMPLETE", run
 assert {entry["role"] for entry in run["jobs"]} == {"Concierge", "Events", "Buyer", "Treasurer"}
+by_role = dict(messages)
+assert by_role["Concierge"].startswith("Saved the plan for the event at Golden Gate Park.")
+assert "Treasurer is reviewing" in by_role["Concierge"]
+assert by_role["Events"].startswith("Event plan ready:")
+assert "Date options:" in by_role["Events"] and "Draft invitation:" in by_role["Events"]
+assert by_role["Buyer"].startswith("Checked a product source for 3 custom water bottles.")
+assert "Product estimate for 3:" in by_role["Buyer"]
+assert by_role["Treasurer"].startswith("Budget review recorded for")
+assert "Recorded swag allocation has $2,500.00 available" in by_role["Treasurer"]
+assert "Next: Bring me the exact checkout total" in by_role["Treasurer"]
+for role in ("Concierge", "Events", "Buyer"):
+    reply = by_role[role]
+    assert reply.count("Status:") == 1 and "Next:" in reply
+    assert "internal demo" not in reply.casefold()
+assert "Status:" not in by_role["Treasurer"] and "internal demo" not in by_role["Treasurer"].casefold()
 with SessionLocal() as session:
     assert session.get(CrewProject, run_id) is not None
     assert session.execute(select(PendingOrder)).scalars().all() == []
     assert session.execute(select(Payment)).scalars().all() == []
     links = session.execute(select(RunResourceLink).where(RunResourceLink.run_id == run_id)).scalars().all()
     assert {link.resource_kind for link in links} == {"publisher_product", "budget_review"}
-assert any("has not reserved a venue" in text for role, text in messages if role == "Events")
+assert any("Event plan ready" in text and "no reservation has been requested" in text
+           for role, text in messages if role == "Events")
 assert any("$60.75–$70.23" in text for role, text in messages if role == "Buyer")
-assert any("No funds were reserved" in text for role, text in messages if role == "Treasurer")
+review = next(entry["output"] for entry in run["jobs"] if entry["role"] == "Treasurer")
+assert review["payment_status"] == "NONE" and review["reserved_cents"] == 0
 park_plan = ProjectPlan(name="Pengwin park event",
                         event=EventProposal(title="Pengwin park event",
                                             date_phrase="in about a month",
@@ -80,7 +97,7 @@ park_plan = ProjectPlan(name="Pengwin park event",
 park_output, park_message = jobs._project_event_work(None, park_plan.model_dump(mode="json"))
 assert park_output["official_reservation_route"]["url"] == "https://www.tjpa.org/permits-reservations"
 assert park_output["official_reservation_route"]["availability"] == "UNCHECKED"
-assert "No reservation has been requested" in park_message
+assert "no reservation has been requested" in park_message
 '''
     result = subprocess.run([sys.executable, "-c", script], env=env,
                             capture_output=True, text=True, timeout=45)

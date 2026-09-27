@@ -4,8 +4,9 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -18,7 +19,9 @@ from sqlalchemy.orm import Session
 
 from .audit import record
 from .config import settings
-from .db import AgentJob, AuditEvent, Budget, ControlFlag, CrewRun, Payment, PendingOrder, Request, SessionLocal, Task, Vendor
+from .db import (AgentJob, AuditEvent, Budget, ControlFlag, CrewProject,
+                 CrewRun, Payment, PendingOrder, ProjectRunLink, Request,
+                 SessionLocal, Task, Vendor)
 from .inference import VultrInference
 from .sandbox import is_reported_timeout
 from .seed import seed_demo
@@ -417,6 +420,203 @@ def _historical_containment_proof(session: Session) -> dict | None:
     return None
 
 
+def _project_object(raw: str) -> dict:
+    """Parse saved project data without ever forwarding its freeform fields."""
+    if not isinstance(raw, str) or len(raw) > 50_000:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _public_date_options(value: object) -> list[str]:
+    if not isinstance(value, list) or len(value) > 3:
+        return []
+    options = []
+    for item in value:
+        if not isinstance(item, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", item):
+            return []
+        try:
+            date.fromisoformat(item)
+        except ValueError:
+            return []
+        options.append(item)
+    return options
+
+
+def _featured_project_step(job: AgentJob | None, *, role: str, title: str,
+                           verified: bool, completed_evidence: str) -> dict:
+    if job is not None and job.status == "DONE" and verified:
+        status, evidence = "completed", completed_evidence
+    elif job is not None and job.status in {"HELD", "FAILED", "REJECTED"}:
+        status, evidence = job.status.lower(), "This role has no verified result for the latest revision."
+    elif job is not None and job.status == "RUNNING":
+        status, evidence = "in_progress", "This role is working on the latest revision."
+    else:
+        status, evidence = "pending", "No verified result is saved for the latest revision."
+    return {"role": role, "title": title, "status": status, "evidence": evidence,
+            "recorded_at": _utc_iso(job.updated_at) if job is not None else None}
+
+
+def _featured_project(session: Session) -> dict | None:
+    """Public proof for one explicitly selected, owner-matched demo project.
+
+    The project ID is an allowlist key, not an API parameter. No saved name,
+    prompt, Slack turn, draft, owner, channel, or run identifier is returned.
+    Only the current linked run's checked role outputs may contribute facts.
+    """
+    project_id = settings.public_demo_project_id
+    owner_id = settings.public_demo_owner_user_id
+    demo_channel = os.getenv("SLACK_DEMO_CHANNEL_ID", "").strip()
+    allowed_users = {
+        user.strip() for key in ("SLACK_ALLOWED_USER_IDS", "SLACK_ADMIN_USER_IDS")
+        for user in os.getenv(key, "").split(",") if user.strip()
+    }
+    if (not re.fullmatch(r"[0-9a-fA-F-]{36}", project_id)
+            or not owner_id or not demo_channel or owner_id not in allowed_users):
+        return None
+    project = session.get(CrewProject, project_id)
+    if (project is None or project.owner_user_id != owner_id
+            or project.channel_id != demo_channel):
+        return None
+    plan = _project_object(project.plan_json)
+    event_plan = plan.get("event")
+    swag_plan = plan.get("swag")
+    invitations = plan.get("invitations")
+    if (plan.get("kind") != "project_proposal"
+            or not isinstance(event_plan, dict)
+            or not isinstance(swag_plan, dict)
+            or not isinstance(invitations, dict)
+            or not isinstance(event_plan.get("venue_name"), str)
+            or not re.fullmatch(r"(?:the\s+)?salesforce park", event_plan["venue_name"].strip(), re.I)
+            or swag_plan.get("product") != "water_bottle"
+            or invitations.get("intent") != "draft_invitations"):
+        return None
+    links = session.execute(
+        select(ProjectRunLink, CrewRun)
+        .join(CrewRun, ProjectRunLink.run_id == CrewRun.id)
+        .where(ProjectRunLink.project_id == project.id)
+        .order_by(ProjectRunLink.id.desc())
+    ).all()
+    if not links or any(
+        run.source_user != owner_id or run.channel_id != demo_channel or run.flow != "project-plan"
+        for _, run in links
+    ):
+        return None
+    latest_run = links[0][1]
+    if latest_run.status not in _JUDGE_STATUSES:
+        return None
+    jobs = session.execute(select(AgentJob).where(AgentJob.run_id == latest_run.id)
+                           .order_by(AgentJob.updated_at.desc(), AgentJob.id.desc())).scalars().all()
+    by_step: dict[tuple[str, str], AgentJob] = {}
+    for job in jobs:
+        if (job.role, job.kind) in {
+            ("Concierge", "dispatch"), ("Events", "event_research"),
+            ("Buyer", "product_source"), ("Treasurer", "budget_review"),
+        }:
+            by_step.setdefault((job.role, job.kind), job)
+    concierge = by_step.get(("Concierge", "dispatch"))
+    events = by_step.get(("Events", "event_research"))
+    buyer = by_step.get(("Buyer", "product_source"))
+    treasurer = by_step.get(("Treasurer", "budget_review"))
+    event_output = _project_object(events.output_json) if events and events.status == "DONE" else {}
+    route = event_output.get("official_reservation_route")
+    route_verified = (
+        isinstance(route, dict)
+        and route.get("operator") == "Transbay Joint Powers Authority"
+        and route.get("url") == "https://www.tjpa.org/permits-reservations"
+        and route.get("availability") == "UNCHECKED"
+    )
+    event_verified = (
+        event_output.get("venue_status") == "UNCONFIRMED"
+        and event_output.get("eventbrite_status") == "NOT_CREATED"
+        and event_output.get("invitation_status") == "DRAFT_ONLY"
+        and isinstance(event_output.get("invitation_draft"), str)
+        and bool(event_output["invitation_draft"].strip())
+        and route_verified
+    )
+    date_options = _public_date_options(event_output.get("date_options")) if event_verified else []
+    date_labels = ", ".join(
+        f"{day:%b} {day.day}" for day in map(date.fromisoformat, date_options)
+    )
+    plan_quantity = swag_plan.get("quantity")
+    quantity = plan_quantity if type(plan_quantity) is int and 1 <= plan_quantity <= 1000 else None
+    estimate = _judge_product_estimate(buyer) if buyer is not None else None
+    if estimate is not None and estimate["quantity"] != quantity:
+        estimate = None
+    treasury_output = _project_object(treasurer.output_json) if treasurer and treasurer.status == "DONE" else {}
+    treasury_verified = (
+        estimate is not None
+        and treasury_output.get("review_status") == "ESTIMATE_ONLY"
+        and treasury_output.get("payment_status") == "NONE"
+        and treasury_output.get("reserved_cents") == 0
+        and type(treasury_output.get("reserved_cents")) is int
+        and treasury_output.get("currency") == "USD"
+        and _price_cents(treasury_output.get("product_subtotal_min"), ceiling=100_000_000)
+            == estimate["subtotal_min_cents"]
+        and _price_cents(treasury_output.get("product_subtotal_max"), ceiling=100_000_000)
+            == estimate["subtotal_max_cents"]
+    )
+    steps = [
+        _featured_project_step(concierge, role="Concierge", title="Coordinated the event request",
+                               verified=bool(concierge and concierge.status == "DONE"),
+                               completed_evidence=(
+                                   "Created one saved event plan and delegated venue, product, and budget work."
+                                   if events and buyer and treasurer else
+                                   "Created one saved event plan for venue, product, and budget work."
+                               )),
+        _featured_project_step(events, role="Events", title="Researched venue and invitation",
+                               verified=event_verified,
+                               completed_evidence=(
+                                   f"Proposed {date_labels}; found TJPA's inquiry route and drafted the invitation."
+                                   if date_labels else
+                                   "Found TJPA's park inquiry route and drafted the invitation."
+                               )),
+        _featured_project_step(buyer, role="Buyer", title="Sourced water bottles",
+                               verified=estimate is not None,
+                               completed_evidence=(
+                                   f"Checked Printful's catalog for {quantity} bottles and saved a product-only estimate."
+                               )),
+        _featured_project_step(treasurer, role="Treasurer", title="Reviewed estimated budget",
+                               verified=treasury_verified,
+                               completed_evidence=(
+                                   f"Reviewed {quantity} bottles for the park event and marked the amount estimate-only."
+                               )),
+    ]
+    return {
+        "title": "Salesforce Park event",
+        "saved_at": _utc_iso(project.created_at),
+        "updated_at": _utc_iso(project.updated_at),
+        "revision_count": len(links),
+        "latest_run_status": latest_run.status,
+        "event": {
+            "date_options": date_options,
+            "venue_status": "unconfirmed" if event_verified else "pending",
+            "rsvp_status": "not_created" if event_verified else "pending",
+            "inquiry_url": "https://www.tjpa.org/permits-reservations" if event_verified else None,
+            "invitation_status": "draft_only" if event_verified else "pending",
+        },
+        "buyer": {
+            "quantity": quantity,
+            "unit_min_cents": estimate["unit_min_cents"] if estimate else None,
+            "unit_max_cents": estimate["unit_max_cents"] if estimate else None,
+            "subtotal_min_cents": estimate["subtotal_min_cents"] if estimate else None,
+            "subtotal_max_cents": estimate["subtotal_max_cents"] if estimate else None,
+            "checked_at": estimate["checked_at"] if estimate else None,
+            "source_url": estimate["source_url"] if estimate else None,
+            "checkout_status": "not_ready",
+        },
+        "treasury": {
+            "review_status": "estimate_only" if treasury_verified else "pending",
+            "payment_status": "none_in_project_review" if treasury_verified else "unverified",
+            "reserved_cents": 0 if treasury_verified else None,
+        },
+        "steps": steps,
+    }
+
+
 def _judge_activity_payload():
     """A fixed projection with no private request, user, channel, or credential data."""
     with SessionLocal() as session:
@@ -438,6 +638,7 @@ def _judge_activity_payload():
         product_estimate = next((item for job in product_sources
                                  if (item := _judge_product_estimate(job)) is not None), None)
         containment_proof = _historical_containment_proof(session)
+        featured_project = _featured_project(session)
         counter = session.get(ControlFlag, "vultr_calls")
     try:
         attempted_calls = max(0, int(counter.value)) if counter else 0
@@ -447,6 +648,7 @@ def _judge_activity_payload():
         "as_of": datetime.now(timezone.utc).isoformat(),
         "activity": activity,
         "historical_containment": containment_proof,
+        "featured_project": featured_project,
         "runs": runs,
         "spend": {
             "proposed_mock_orders": proposed,

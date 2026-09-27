@@ -164,6 +164,7 @@ def _stated_capacity(source: str) -> set[int]:
     patterns = (
         rf"\b(?:capacity|seats?|tickets?|spots?)\s*(?:of|for|:)?\s*{number}\b",
         rf"\b{number}\s+(?:guests?|attendees?|people|seats?|spots?|tickets?)\b",
+        rf"\bfor\s+{number}\s+(?:(?:local|ai|startup|tech|community|business)\s+){{0,3}}founders?\b",
     )
     values: set[int] = set()
     words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -175,6 +176,30 @@ def _stated_capacity(source: str) -> set[int]:
             raw = match.group(1).casefold()
             values.add(int(raw) if raw.isdigit() else words[raw])
     return values
+
+
+def _stated_start_and_duration(source: str) -> str | None:
+    """Preserve an explicitly stated start and duration if the model shortens it."""
+    match = re.search(
+        r"\b(?:starting|starts?|from)\s+(?:around\s+)?\d{1,2}(?::\d{2})?\s*"
+        r"(?:a\.?m\.?|p\.?m\.?)"
+        r"(?:\s+for\s+\d{1,3}\s+(?:minutes?|hours?))?",
+        source, re.I,
+    )
+    return match.group(0) if match else None
+
+
+def _stated_park_venue(source: str) -> str | None:
+    match = re.search(r"\bat\s+([A-Z][A-Za-z0-9 .'-]{1,80}?\s+Park)\b", source)
+    return " ".join(match.group(1).split()) if match else None
+
+
+def _stated_founder_audience(source: str) -> str | None:
+    match = re.search(
+        r"\bfor\s+\d{1,5}\s+((?:(?:local|ai|startup|tech|community|business)\s+){0,3}founders?)\b",
+        source, re.I,
+    )
+    return match.group(1) if match else None
 
 
 def _missing(code: MissingCode, prompt: str) -> MissingInformation:
@@ -194,20 +219,31 @@ def checked_project_plan(plan: ProjectPlan, request_text: str, context: str = ""
     if event_requested and event is None:
         event = EventProposal(title="Event")
     if event:
+        stated_capacities = _stated_capacity(source)
+        relative_date = re.search(
+            r"\b(?:about a month from now|in about a month|around a month from now|next month)\b",
+            source, re.I,
+        )
         event = event.model_copy(update={
             "title": event.title if _is_stated(event.title, source) else "Event",
-            "date_phrase": event.date_phrase if _is_stated(event.date_phrase, source) else None,
-            "time_phrase": event.time_phrase if _is_stated(event.time_phrase, source) else None,
-            "venue_name": event.venue_name if _is_stated(event.venue_name, source) and VENUE_WORDS.search(source) else None,
-            "capacity": event.capacity if event.capacity in _stated_capacity(source) else None,
+            "date_phrase": (event.date_phrase if _is_stated(event.date_phrase, source) else
+                            relative_date.group(0) if relative_date else None),
+            "time_phrase": (_stated_start_and_duration(source) or
+                            (event.time_phrase if _is_stated(event.time_phrase, source) else None)),
+            "venue_name": (event.venue_name if _is_stated(event.venue_name, source) and VENUE_WORDS.search(source)
+                           else _stated_park_venue(source)),
+            "capacity": (event.capacity if event.capacity in stated_capacities else
+                         next(iter(stated_capacities)) if len(stated_capacities) == 1 else None),
         })
 
     swag = plan.swag if bottle_requested else None
     if bottle_requested and swag is None:
         swag = SwagProposal()
     if swag:
+        stated_quantities = _stated_numbers_near(source, BOTTLE_WORDS)
         swag = swag.model_copy(update={
-            "quantity": swag.quantity if swag.quantity in _stated_numbers_near(source, BOTTLE_WORDS) else None,
+            "quantity": (swag.quantity if swag.quantity in stated_quantities else
+                         next(iter(stated_quantities)) if len(stated_quantities) == 1 else None),
             "design_phrase": swag.design_phrase if _is_stated(swag.design_phrase, source) else None,
         })
 
@@ -220,7 +256,8 @@ def checked_project_plan(plan: ProjectPlan, request_text: str, context: str = ""
                                     if email.strip().casefold() in mentioned_emails))
         invitations = invitations.model_copy(update={
             "emails": emails,
-            "audience_phrase": invitations.audience_phrase if _is_stated(invitations.audience_phrase, source) else None,
+            "audience_phrase": (invitations.audience_phrase if _is_stated(invitations.audience_phrase, source)
+                                else _stated_founder_audience(source)),
         })
 
     missing: list[MissingInformation] = []
@@ -249,34 +286,54 @@ def checked_project_plan(plan: ProjectPlan, request_text: str, context: str = ""
             missing.append(_missing("invite_audience", "Who should receive the invitation?"))
         missing.append(_missing("invitation_approval", "Please review the invitation text and delivery channel before anything is sent."))
 
-    name = plan.name if _is_stated(plan.name, source) else (event.title if event else "Office project")
+    name = (plan.name if _is_stated(plan.name, source) else
+            event.title if event and event.title != "Event" else
+            f"Event at {event.venue_name}"[:120] if event and event.venue_name else
+            "Office project")
     # A model-written clarification could claim fabricated facts or approvals.
     return ProjectPlan(name=name, event=event, swag=swag, invitations=invitations, missing=missing)
 
 
 def project_plan_summary(plan: ProjectPlan, research: object | None = None) -> str:
     """Explain the proposal without turning proposed work into completed acts."""
-    pieces = [f"I put together a plan for {plan.name}."]
+    generic_titles = {"event", "gathering", "pengwin event", "pengwin gathering"}
+    event_label = (plan.event.title if plan.event and
+                   plan.event.title.casefold() not in generic_titles else None)
+    project_label = (event_label or
+                     (f"the event at {plan.event.venue_name}" if plan.event and plan.event.venue_name else None) or
+                     (plan.name if plan.name != "Office project" else "your project"))
+    pieces = [f"Saved the plan for {project_label}."]
     if plan.event:
         details = [value for value in (plan.event.date_phrase, plan.event.time_phrase, plan.event.venue_name) if value]
         if plan.event.capacity:
             details.append(f"capacity {plan.event.capacity}")
-        pieces.append(f"Event: {plan.event.title}{' — ' + ', '.join(details) if details else ''}. This plan has not reserved a venue.")
+        pieces.append(f"Event: {', '.join(details) if details else 'date and venue to confirm'}.")
     if plan.swag:
-        count = str(plan.swag.quantity) if plan.swag.quantity else "an unspecified number of"
-        pieces.append(f"Water bottles: {count} proposed. This plan has not obtained a quote or placed an order.")
+        count = str(plan.swag.quantity) if plan.swag.quantity else "quantity to confirm"
+        pieces.append(f"Water bottles: {count}; Buyer is checking the product source and price.")
     if plan.invitations:
-        audience = plan.invitations.audience_phrase or (f"{len(plan.invitations.emails)} named recipient(s)" if plan.invitations.emails else "an unspecified audience")
-        pieces.append(f"Invitations: I can draft them for {audience}. None have been sent.")
+        audience = plan.invitations.audience_phrase or (f"{len(plan.invitations.emails)} named recipient(s)" if plan.invitations.emails else "audience to confirm")
+        pieces.append(f"Invitations: Events is drafting copy for {audience}.")
+    pieces.append("Treasurer is reviewing the budget purpose and any product estimate.")
     status = getattr(research, "status", None)
     if status == "unavailable":
         pieces.append("Live search is unavailable, so current venue and product details are unverified.")
     elif status == "error":
         pieces.append("Live search failed; current venue and product details are unverified.")
     if plan.missing:
-        questions = [item.prompt for item in plan.missing if item.code not in {"product_quote", "invitation_approval"}]
+        questions = [item.prompt for item in plan.missing if item.code not in {
+            "venue_availability", "product_quote", "invitation_approval",
+        }]
         if questions:
-            pieces.append("To move ahead: " + " ".join(questions[:3]))
+            pieces.append("Next: " + " ".join(questions[:3]))
+    pending_actions = []
+    if plan.event:
+        pending_actions.append("venue booking or Eventbrite publication")
+    if plan.swag:
+        pending_actions.append("order or payment")
+    if plan.invitations:
+        pending_actions.append("invitation send")
+    pieces.append("Status: planning only; no " + ", ".join(pending_actions) + ".")
     return "\n".join(pieces)[:1800]
 
 
