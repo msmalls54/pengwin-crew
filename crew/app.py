@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from .audit import record
@@ -16,10 +16,9 @@ from .config import settings
 from .db import AuditEvent, Budget, ControlFlag, Payment, PendingOrder, Request, SessionLocal, Task, Vendor
 from .inference import VultrInference
 from .seed import seed_demo
-from .workflow import run_flow
 
 
-app = FastAPI(title="Office Ops Crew", docs_url=None, redoc_url=None)
+app = FastAPI(title="Pengwin Crew", docs_url=None, redoc_url=None)
 WEB = Path(__file__).resolve().parents[1] / "web"
 app.mount("/static", StaticFiles(directory=WEB), name="static")
 
@@ -48,6 +47,18 @@ def require_admin(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(401, "Admin token required", headers={"WWW-Authenticate": "Bearer"})
 
 
+def require_demo(authorization: str | None = Header(default=None)) -> str:
+    if len(settings.web_demo_token) < 24:
+        raise HTTPException(503, "WEB_DEMO_TOKEN must be configured")
+    if authorization is None:
+        raise HTTPException(401, "Demo token required", headers={"WWW-Authenticate": "Bearer"})
+    if len(settings.admin_token) >= 24 and hmac.compare_digest(authorization, f"Bearer {settings.admin_token}"):
+        return "admin"
+    if hmac.compare_digest(authorization, f"Bearer {settings.web_demo_token}"):
+        return "demo"
+    raise HTTPException(401, "Demo token required", headers={"WWW-Authenticate": "Bearer"})
+
+
 @app.get("/")
 def index():
     return FileResponse(WEB / "index.html")
@@ -60,7 +71,7 @@ def health():
             "sandbox_mode": settings.sandbox_mode, "payment_mode": settings.payment_mode}
 
 
-@app.get("/api/state")
+@app.get("/api/state", dependencies=[Depends(require_admin)])
 def state():
     with SessionLocal() as session:
         budgets = session.execute(select(Budget).order_by(Budget.office_id, Budget.category)).scalars().all()
@@ -91,7 +102,7 @@ def state():
         }
 
 
-@app.get("/api/events")
+@app.get("/api/events", dependencies=[Depends(require_admin)])
 async def events():
     async def stream():
         last_id = 0
@@ -106,7 +117,7 @@ async def events():
     return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
-@app.get("/api/receipts/{payment_id}")
+@app.get("/api/receipts/{payment_id}", dependencies=[Depends(require_admin)])
 def receipt(payment_id: str):
     with SessionLocal() as session:
         payment = session.get(Payment, payment_id)
@@ -125,7 +136,7 @@ def receipt(payment_id: str):
                 "vendor_order_id": order.vendor_order_id}
 
 
-@app.get("/api/invites/{request_id}")
+@app.get("/api/invites/{request_id}", dependencies=[Depends(require_admin)])
 def invite(request_id: str):
     with SessionLocal() as session:
         task = session.execute(select(Task).where(Task.request_id == request_id, Task.agent == "Events", Task.kind == "lunch")).scalar_one_or_none()
@@ -138,14 +149,45 @@ def invite(request_id: str):
 
 @app.post("/api/demo/{flow}", dependencies=[Depends(require_admin)])
 def demo(flow: str):
+    from .jobs import submit_web_demo_run
+
     try:
-        return {"results": run_flow(flow)}
+        return {"run_id": submit_web_demo_run(flow)}
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 class FreezeInput(BaseModel):
     frozen: bool
+
+
+class CodeGoal(BaseModel):
+    goal: str = Field(min_length=1, max_length=1000)
+
+
+@app.get("/api/demo-access")
+def demo_access(role: str = Depends(require_demo)):
+    return {"access": role}
+
+
+@app.post("/api/code-runs", dependencies=[Depends(require_demo)])
+def queue_code_run(body: CodeGoal):
+    from .jobs import submit_web_code_run
+
+    try:
+        return {"run_id": submit_web_code_run(body.goal)}
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.get("/api/code-runs/{run_id}", dependencies=[Depends(require_demo)])
+def code_run(run_id: str):
+    from .jobs import get_run
+
+    run = get_run(run_id)
+    if run is None or run["flow"] != "code-task" or run["source_user"] != "web-demo":
+        raise HTTPException(404)
+    return run
 
 
 @app.post("/api/freeze", dependencies=[Depends(require_admin)])

@@ -11,11 +11,12 @@ load_dotenv()
 @dataclass(frozen=True)
 class Settings:
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./crew.db")
-    company_name: str = os.getenv("COMPANY_NAME", "Brackenrow")
+    company_name: str = os.getenv("COMPANY_NAME", "Pengwin")
     payment_mode: str = os.getenv("PAYMENT_MODE", "simulated")
     planner_mode: str = os.getenv("PLANNER_MODE", "deterministic")
     sandbox_mode: str = os.getenv("SANDBOX_MODE", "local")
     admin_token: str = os.getenv("ADMIN_TOKEN", "")
+    web_demo_token: str = os.getenv("WEB_DEMO_TOKEN", "")
     freeze: bool = os.getenv("FREEZE", "false").lower() == "true"
     vultr_key: str = os.getenv("VULTR_INFERENCE_KEY", "")
     vultr_model: str = os.getenv("VULTR_MODEL", "")

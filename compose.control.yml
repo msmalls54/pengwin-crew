@@ -31,6 +31,41 @@ services:
         condition: service_healthy
     networks: [control]
 
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    command: ["uvicorn", "crew.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env}
+      WEB_DEMO_TOKEN: ${WEB_DEMO_TOKEN:?Set WEB_DEMO_TOKEN in .env}
+      COMPANY_NAME: Pengwin
+      PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
+      PLANNER_MODE: ${PLANNER_MODE:-deterministic}
+      SANDBOX_MODE: ${SANDBOX_MODE:-local}
+      VULTR_MODEL: ${VULTR_MODEL:-}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks: [control]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [web]
+    networks: [control]
+
   concierge:
     build:
       context: .
@@ -39,16 +74,95 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
-      COMPANY_NAME: Brackenrow
+      COMPANY_NAME: Pengwin
       PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
       PLANNER_MODE: ${PLANNER_MODE:-deterministic}
       SANDBOX_MODE: ${SANDBOX_MODE:-local}
       VULTR_MODEL: ${VULTR_MODEL:-}
+      VULTR_INFERENCE_KEY: ${VULTR_INFERENCE_KEY:-}
+      VULTR_MAX_CALLS: ${VULTR_MAX_CALLS:-1000}
       SLACK_CONCIERGE_BOT_TOKEN: ${SLACK_CONCIERGE_BOT_TOKEN:-}
       SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
       SLACK_DEMO_CHANNEL_ID: ${SLACK_DEMO_CHANNEL_ID:-}
       SLACK_ALLOWED_USER_IDS: ${SLACK_ALLOWED_USER_IDS:-}
       SLACK_ADMIN_USER_IDS: ${SLACK_ADMIN_USER_IDS:-}
+      LUMA_ENABLED: ${LUMA_ENABLED:-false}
+      EVENTBRITE_ENABLED: ${EVENTBRITE_ENABLED:-false}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks: [control]
+
+  buyer-chat:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    command: ["python", "-m", "crew.role_slack_bot"]
+    restart: unless-stopped
+    environment:
+      ROLE: Buyer
+      DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
+      PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
+      PLANNER_MODE: ${PLANNER_MODE:-deterministic}
+      VULTR_INFERENCE_KEY: ${VULTR_INFERENCE_KEY:-}
+      VULTR_MODEL: ${VULTR_MODEL:-}
+      VULTR_MAX_CALLS: ${VULTR_MAX_CALLS:-1000}
+      SLACK_BUYER_BOT_TOKEN: ${SLACK_BUYER_BOT_TOKEN:-}
+      SLACK_BUYER_APP_TOKEN: ${SLACK_BUYER_APP_TOKEN:-}
+      SLACK_DEMO_CHANNEL_ID: ${SLACK_DEMO_CHANNEL_ID:-}
+      SLACK_ALLOWED_USER_IDS: ${SLACK_ALLOWED_USER_IDS:-}
+      SLACK_ADMIN_USER_IDS: ${SLACK_ADMIN_USER_IDS:-}
+      SLACK_REPORT_TIMEZONE: ${SLACK_REPORT_TIMEZONE:-America/Los_Angeles}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks: [control]
+
+  events-chat:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    command: ["python", "-m", "crew.role_slack_bot"]
+    restart: unless-stopped
+    environment:
+      ROLE: Events
+      DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
+      PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
+      PLANNER_MODE: ${PLANNER_MODE:-deterministic}
+      VULTR_INFERENCE_KEY: ${VULTR_INFERENCE_KEY:-}
+      VULTR_MODEL: ${VULTR_MODEL:-}
+      VULTR_MAX_CALLS: ${VULTR_MAX_CALLS:-1000}
+      SLACK_EVENTS_BOT_TOKEN: ${SLACK_EVENTS_BOT_TOKEN:-}
+      SLACK_EVENTS_APP_TOKEN: ${SLACK_EVENTS_APP_TOKEN:-}
+      SLACK_DEMO_CHANNEL_ID: ${SLACK_DEMO_CHANNEL_ID:-}
+      SLACK_ALLOWED_USER_IDS: ${SLACK_ALLOWED_USER_IDS:-}
+      SLACK_ADMIN_USER_IDS: ${SLACK_ADMIN_USER_IDS:-}
+      SLACK_REPORT_TIMEZONE: ${SLACK_REPORT_TIMEZONE:-America/Los_Angeles}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks: [control]
+
+  treasurer-chat:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    command: ["python", "-m", "crew.role_slack_bot"]
+    restart: unless-stopped
+    environment:
+      ROLE: Treasurer
+      DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
+      PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
+      PLANNER_MODE: ${PLANNER_MODE:-deterministic}
+      VULTR_INFERENCE_KEY: ${VULTR_INFERENCE_KEY:-}
+      VULTR_MODEL: ${VULTR_MODEL:-}
+      VULTR_MAX_CALLS: ${VULTR_MAX_CALLS:-1000}
+      SLACK_TREASURER_BOT_TOKEN: ${SLACK_TREASURER_BOT_TOKEN:-}
+      SLACK_TREASURER_APP_TOKEN: ${SLACK_TREASURER_APP_TOKEN:-}
+      SLACK_DEMO_CHANNEL_ID: ${SLACK_DEMO_CHANNEL_ID:-}
+      SLACK_ALLOWED_USER_IDS: ${SLACK_ALLOWED_USER_IDS:-}
+      SLACK_ADMIN_USER_IDS: ${SLACK_ADMIN_USER_IDS:-}
+      SLACK_REPORT_TIMEZONE: ${SLACK_REPORT_TIMEZONE:-America/Los_Angeles}
     depends_on:
       init:
         condition: service_completed_successfully
@@ -62,7 +176,7 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
-      COMPANY_NAME: Brackenrow
+      COMPANY_NAME: Pengwin
       PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
       VULTR_INFERENCE_KEY: ${VULTR_INFERENCE_KEY:-}
       VULTR_MODEL: ${VULTR_MODEL:-}
@@ -82,7 +196,7 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
-      COMPANY_NAME: Brackenrow
+      COMPANY_NAME: Pengwin
       PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
       PLANNER_MODE: ${PLANNER_MODE:-deterministic}
       SANDBOX_MODE: ${SANDBOX_MODE:-local}
@@ -110,7 +224,7 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
-      COMPANY_NAME: Brackenrow
+      COMPANY_NAME: Pengwin
       PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
       SANDBOX_MODE: ${SANDBOX_MODE:-local}
       DOCKER_HOST: ${DOCKER_HOST:-}
@@ -119,6 +233,11 @@ services:
       MOCK_STORE_URL: ${MOCK_STORE_URL:-http://mock-stores:8080}
       SLACK_EVENTS_BOT_TOKEN: ${SLACK_EVENTS_BOT_TOKEN:-}
       SLACK_DEMO_CHANNEL_ID: ${SLACK_DEMO_CHANNEL_ID:-}
+      LUMA_API_KEY: ${LUMA_API_KEY:-}
+      EVENTBRITE_PRIVATE_TOKEN: ${EVENTBRITE_PRIVATE_TOKEN:-}
+      EVENTBRITE_ORGANIZATION_ID: ${EVENTBRITE_ORGANIZATION_ID:-}
+      EVENTBRITE_VENUE_ID: ${EVENTBRITE_VENUE_ID:-}
+      EVENTBRITE_VENUE_LABEL: ${EVENTBRITE_VENUE_LABEL:-}
     volumes:
       - ${SSH_DIR:?Set SSH_DIR in .env}:/home/crew/.ssh:ro
     depends_on:
@@ -134,7 +253,7 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://crew:${POSTGRES_PASSWORD}@db:5432/crew
-      COMPANY_NAME: Brackenrow
+      COMPANY_NAME: Pengwin
       PAYMENT_MODE: ${PAYMENT_MODE:-simulated}
       FREEZE: ${FREEZE:-false}
       AIRWALLEX_CLIENT_ID: ${AIRWALLEX_CLIENT_ID:-}
@@ -150,6 +269,8 @@ services:
 
 volumes:
   crew-db:
+  caddy-data:
+  caddy-config:
 
 networks:
   control:

@@ -3,25 +3,33 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Office Ops Crew</title>
+  <title>Pengwin Crew</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/app.js" defer></script>
 </head>
 <body>
   <div class="shell">
     <header>
-      <div><span class="eyebrow">KESTREL / OPERATIONS</span><h1>Office Ops Crew</h1><p>Purchases move through separate agents, a contained shop, and a code-enforced payment gate.</p></div>
-      <div id="mode" class="mode">Connecting…</div>
+      <div><span class="eyebrow">PENGWIN / EXECUTION PROOF</span><h1>Pengwin Crew</h1><p>Pengwin works in Slack. This proof view shows a task executed inside a disposable Vultr sandbox and the output it actually returned.</p></div>
+      <div id="mode" class="mode">Demo access required</div>
     </header>
     <main>
       <section class="controls card">
-        <div><h2>Run a request</h2><p>Each flow leaves an audit trail. The hoodie page contains a malicious quantity instruction; compare the Buyer's proposal with the payment decision.</p></div>
-        <div class="auth"><label for="token">Demo admin token</label><input id="token" type="password" autocomplete="off" placeholder="Enter ADMIN_TOKEN"></div>
+        <div><h2 id="controls-title">Connect to Pengwin</h2><p id="controls-desc">Enter a demo token for the sandbox lab. Operator access also opens the office workflow controls and audit view.</p></div>
+        <div class="auth"><label for="token">Demo or operator token</label><input id="token" type="password" autocomplete="off" placeholder="Enter access token"><button id="connect" class="secondary">Connect</button></div>
         <div class="actions"><button data-flow="berlin-pantry">Berlin pantry</button><button data-flow="welcome-kit">New hire kit + lunch</button><button data-flow="hoodie-attack" class="attack">Company hoodies + attack</button><button id="freeze" class="secondary">Freeze payments</button><button id="reset" class="secondary">Reset demo</button></div>
         <p id="feedback" role="status" aria-live="polite"></p>
       </section>
+      <section class="card lab">
+        <div><span class="eyebrow">SANDBOX LAB</span><h2>Give the crew a task</h2><p>Try “Calculate 19 plus 23” or paste a small data question. Vultr writes Python, the isolated container executes it, and the result and any repair attempt appear below. This lab cannot reach the internet, files, payments, or calendar accounts.</p></div>
+        <label for="code-goal">Plain-English goal</label>
+        <textarea id="code-goal" maxlength="1000" rows="3" placeholder="Calculate 19 plus 23 and show the result."></textarea>
+        <button id="run-code">Run in sandbox</button>
+        <p id="code-status" role="status" aria-live="polite">Enter a demo token to run a task.</p>
+        <div id="code-attempts"></div>
+      </section>
       <section class="grid">
-        <div class="card"><div class="card-head"><h2>Live work</h2><span id="connection">● Live</span></div><div id="timeline" class="timeline"></div></div>
+        <div class="card"><div class="card-head"><h2>Live work</h2><span id="connection">○ Locked</span></div><div id="timeline" class="timeline"></div></div>
         <div class="stack">
           <div class="card"><h2>Budgets</h2><div id="budgets"></div></div>
           <div class="card"><h2>Agent permissions</h2><div id="permissions"></div></div>

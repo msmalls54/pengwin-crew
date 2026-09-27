@@ -1,7 +1,7 @@
 # Orderly DoorDash reuse audit
 
-Checked September 26, 2026. The source project is the local Orderly checkout at
-`C:\Users\Small\OneDrive\Documents\ChatGPT\Mikes Hckathin project` (HEAD `5ebaa6b`).
+Checked September 26, 2026. The source project is the owner's local Orderly
+checkout (HEAD `5ebaa6b`).
 It was inspected read-only. Orderly's README reports one supervised, delivered
 DoorDash order; this audit inspected the code, tests, and sanitized visual
 receipt, but did not re-query DoorDash or independently confirm delivery.
@@ -19,7 +19,7 @@ receipt, but did not re-query DoorDash or independently confirm delivery.
   purchase, consumes one durable purchase run, and holds uncertain outcomes for
   reconciliation instead of retrying a possibly charged order.
 - `contracts/order-state-machine.md` describes the transaction states and
-  approval boundary. This pattern is relevant to Office Ops Crew's own vendor
+  approval boundary. This pattern is relevant to Pengwin Crew's own vendor
   and Airwallex paths even though the DoorDash provider is not usable here.
 
 `crew/doordash.py` implements only the **offline preview validation** portion,
@@ -43,9 +43,14 @@ price comparison of CLI data. We verified the archive against the published
 SHA-256 `37eec0c72bcb663aaf9759ea098d49d9c02266bb895cbbfbadeae41866608dd4`
 before reading its terms; the binary was not executed or installed.
 
-Office Ops Crew's company lunch is an entity/business use, so Orderly's
+Pengwin Crew's company lunch is an entity/business use, so Orderly's
 single-account CLI access cannot be transferred to it. A real DoorDash lane
 would require a separate DoorDash-approved business/developer integration and
 terms that allow this use. The fictional lunch demo and Airwallex sandbox path
 remain separate. DoorDash checkout would charge a saved DoorDash payment method,
 not serve as an Airwallex payout rail.
+
+The owner confirmed that the personal DoorDash CLI account has a linked payment
+method. This clarifies the charge destination, not Pengwin's authority to order
+for a company. The connected Airwallex account is sandbox-only and cannot
+repay a real charge. No live order or reimbursement was attempted here.

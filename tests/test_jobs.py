@@ -176,7 +176,7 @@ with SessionLocal() as session:
     payments = session.execute(select(Payment)).scalars().all()
     assert [p.status for p in payments] == ['SIMULATED', 'SIMULATED']
 assert any('3 oat milk cartons' in message for role, message in messages if role == 'Concierge')
-assert any('simulated payment' in message for role, message in messages if role == 'Treasurer')
+assert any('demo checkout' in message for role, message in messages if role == 'Treasurer')
 """)
 
 

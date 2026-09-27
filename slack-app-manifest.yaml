@@ -1,10 +1,10 @@
 _metadata:
   major_version: 1
 display_information:
-  name: Brackenrow Concierge
+  name: Pengwin Concierge
 features:
   bot_user:
-    display_name: Brackenrow Concierge
+    display_name: Pengwin Concierge
     always_online: false
   slash_commands:
     - command: /crew

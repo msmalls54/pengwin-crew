@@ -152,7 +152,7 @@ def prepare_berlin_lunch(*, headcount: int = 8, source: str = "web", source_user
     browser = sandbox()
     order = _pending_order(request_id=request_id, sku="LUNCH-BER", qty=headcount, browser=browser)
     invite = (
-        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Office Ops Crew//EN\r\n"
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Pengwin Crew//EN\r\n"
         "BEGIN:VEVENT\r\n"
         f"UID:{request_id}@office-ops.invalid\r\n"
         f"DTSTAMP:{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}\r\n"

@@ -33,11 +33,12 @@ class DockerSandbox:
         self.client = docker.DockerClient(base_url=settings.docker_host, use_ssh_client=True)
 
     def _job(self, payload: dict) -> dict:
+        is_code = payload.get("action") == "execute_code"
         container = self.client.containers.create(
             image=settings.sandbox_image,
             command=["python", "/runner/worker.py"],
-            environment={"TASK_JSON": json.dumps(payload), "MOCK_STORE_URL": settings.mock_store_url},
-            network=settings.sandbox_network,
+            environment={"TASK_JSON": json.dumps(payload), **({} if is_code else {"MOCK_STORE_URL": settings.mock_store_url})},
+            network="none" if is_code else settings.sandbox_network,
             detach=True,
             read_only=True,
             cap_drop=["ALL"],

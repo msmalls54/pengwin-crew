@@ -51,15 +51,37 @@ def test_web_mutations_require_admin_token(tmp_path, monkeypatch):
     import sys
     env = os.environ.copy()
     env.update({"DATABASE_URL": f"sqlite:///{tmp_path / 'api-test.db'}",
-                "ADMIN_TOKEN": "local-test-token-with-more-than-24-characters"})
+                "ADMIN_TOKEN": "local-test-token-with-more-than-24-characters",
+                "WEB_DEMO_TOKEN": "separate-demo-token-with-more-than-24-characters",
+                "PLANNER_MODE": "vultr", "SANDBOX_MODE": "docker"})
     script = """
 from fastapi.testclient import TestClient
 from crew.app import app
+import crew.workflow as workflow
+from crew.sandbox import LocalCatalogSandbox
+from crew.inference import BuyerChoice
+workflow.sandbox=lambda:LocalCatalogSandbox()
+class FakeInference:
+    def buyer_choice(self, *, requested_sku, requested_qty, page_text):
+        return BuyerChoice(sku=requested_sku, quantity=requested_qty, reason='test')
+workflow.VultrInference=FakeInference
 with TestClient(app) as client:
+    headers={'Authorization': 'Bearer local-test-token-with-more-than-24-characters'}
+    demo_headers={'Authorization': 'Bearer separate-demo-token-with-more-than-24-characters'}
     assert client.get('/health').status_code == 200
-    assert client.get('/api/state').status_code == 200
+    assert client.get('/api/state').status_code == 401
+    assert client.get('/api/state', headers=demo_headers).status_code == 401
+    assert client.get('/api/state', headers=headers).status_code == 200
+    assert client.get('/api/receipts/not-real').status_code == 401
+    assert client.post('/api/code-runs', json={'goal':'Calculate 19 plus 23'}).status_code == 401
+    assert client.get('/api/demo-access', headers=demo_headers).json()['access'] == 'demo'
+    queued=client.post('/api/code-runs', json={'goal':'Calculate 19 plus 23'}, headers=demo_headers)
+    assert queued.status_code == 200, queued.text
+    run_id=queued.json()['run_id']
+    assert client.get('/api/code-runs/'+run_id, headers=demo_headers).json()['status'] == 'QUEUED'
     assert client.post('/api/demo/berlin-pantry').status_code == 401
-    assert client.post('/api/demo/berlin-pantry', headers={'Authorization': 'Bearer local-test-token-with-more-than-24-characters'}).status_code == 200
+    assert client.post('/api/demo/berlin-pantry', headers=demo_headers).status_code == 401
+    assert client.post('/api/demo/berlin-pantry', headers=headers).status_code == 200
 """
     result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr

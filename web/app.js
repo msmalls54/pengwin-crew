@@ -1,7 +1,10 @@
 let adminToken = '';
+let accessRole = '';
 let latestState = null;
+let activeCodeRun = '';
 const $ = id => document.getElementById(id);
 const money = (cents, currency) => new Intl.NumberFormat('en-US', {style:'currency',currency}).format(cents / 100);
+const authHeaders = () => ({'Authorization':`Bearer ${adminToken}`});
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -48,7 +51,8 @@ function render(state) {
 }
 
 async function refresh() {
-  try { const response=await fetch('/api/state'); if(!response.ok) throw new Error(`HTTP ${response.status}`); render(await response.json()); }
+  if(!adminToken||accessRole!=='admin') return;
+  try { const response=await fetch('/api/state',{headers:authHeaders()}); if(!response.ok) throw new Error(`HTTP ${response.status}`); render(await response.json()); $('connection').textContent='● Updating'; }
   catch(error) { $('feedback').textContent=`Could not load state: ${error.message}`; }
 }
 
@@ -57,11 +61,11 @@ async function action(path, body) {
   if (!adminToken) { $('feedback').textContent='Enter the demo admin token first.'; return; }
   $('feedback').textContent='Running…';
   try {
-    const response=await fetch(path,{method:'POST',headers:{'Authorization':`Bearer ${adminToken}`,'Content-Type':'application/json'},body:JSON.stringify(body??{})});
+    const response=await fetch(path,{method:'POST',headers:{...authHeaders(),'Content-Type':'application/json'},body:JSON.stringify(body??{})});
     const result=await response.json();
     if(!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
     const feedback=$('feedback');
-    feedback.textContent='Completed. Check the timeline and receipts.';
+    feedback.textContent=result.run_id?`Queued run ${result.run_id}. Watch the timeline and receipts.`:'Updated.';
     const invite=result.results?.find(item=>item.invite_ready);
     if(invite){
       feedback.append(' ');
@@ -74,7 +78,7 @@ async function action(path, body) {
 }
 
 async function showReceipt(id) {
-  const response=await fetch(`/api/receipts/${encodeURIComponent(id)}`);
+  const response=await fetch(`/api/receipts/${encodeURIComponent(id)}`,{headers:authHeaders()});
   if(!response.ok) return;
   const data=await response.json();
   const body=$('receipt-body'); body.replaceChildren(node('h2','',`Payment ${id.slice(0,8)}`));
@@ -84,11 +88,68 @@ async function showReceipt(id) {
   body.append(dl); $('receipt').showModal();
 }
 
+function renderCodeRun(run) {
+  $('code-status').textContent=`Run ${run.id}: ${run.status}. ${run.status==='RUNNING'?'The crew is working.':'The recorded code and output are below.'}`;
+  const attempts=run.jobs.flatMap(job=>job.output?.attempts||[]);
+  $('code-attempts').replaceChildren(...attempts.map((attempt,index)=>{
+    const card=node('div','code-attempt');
+    card.append(node('h3','',`Attempt ${index+1} · exit ${attempt.exit_code} · ${attempt.code_hash}`));
+    card.append(node('div','code-label','Executed Python'),node('pre','',attempt.code));
+    card.append(node('div','code-label','stdout'),node('pre','',attempt.stdout||'(empty)'));
+    if(attempt.stderr) card.append(node('div','code-label','stderr'),node('pre error-output',attempt.stderr));
+    return card;
+  }));
+  if(['COMPLETE','FAILED','HELD'].includes(run.status)) activeCodeRun='';
+}
+
+async function pollCodeRun() {
+  if(!activeCodeRun||!adminToken) return;
+  try {
+    const response=await fetch(`/api/code-runs/${encodeURIComponent(activeCodeRun)}`,{headers:authHeaders()});
+    if(!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderCodeRun(await response.json());
+  } catch(error) { $('code-status').textContent=`Could not read run: ${error.message}`; }
+}
+
+async function runCode() {
+  adminToken=$('token').value.trim();
+  const goal=$('code-goal').value.trim();
+  if(!adminToken) { $('code-status').textContent='Enter the demo token first.'; return; }
+  if(!goal) { $('code-status').textContent='Describe a calculation or data task first.'; return; }
+  $('code-status').textContent='Queueing the task…';
+  $('code-attempts').replaceChildren();
+  try {
+    const response=await fetch('/api/code-runs',{method:'POST',headers:{...authHeaders(),'Content-Type':'application/json'},body:JSON.stringify({goal})});
+    const data=await response.json();
+    if(!response.ok) throw new Error(data.detail||`HTTP ${response.status}`);
+    activeCodeRun=data.run_id;
+    await pollCodeRun();
+  } catch(error) { $('code-status').textContent=`Could not queue task: ${error.message}`; }
+}
+
+async function connect() {
+  adminToken=$('token').value.trim();
+  if(!adminToken) { $('feedback').textContent='Enter an access token first.'; return; }
+  try {
+    const response=await fetch('/api/demo-access',{headers:authHeaders()});
+    if(!response.ok) throw new Error('The token was not accepted.');
+    accessRole=(await response.json()).access;
+    document.body.classList.toggle('demo-only',accessRole==='demo');
+    $('mode').textContent=accessRole==='demo'?'Sandbox demo connected':'Operator connected';
+    $('controls-title').textContent=accessRole==='demo'?'Sandbox demo ready':'Run a request';
+    $('controls-desc').textContent=accessRole==='demo'
+      ? 'Give the crew a plain-English code task below. Generated code and real output appear in this browser.'
+      : 'Each flow leaves an audit trail. The hoodie page contains a malicious quantity instruction; compare the Buyer’s proposal with the payment decision.';
+    $('feedback').textContent='Connected.';
+    $('code-status').textContent='Describe a calculation or small data task to run in the sandbox.';
+    await refresh();
+  } catch(error) { accessRole=''; $('feedback').textContent=error.message; }
+}
+
 document.querySelectorAll('[data-flow]').forEach(button=>button.addEventListener('click',()=>action(`/api/demo/${button.dataset.flow}`)));
+$('connect').addEventListener('click',connect);
+$('run-code').addEventListener('click',runCode);
 $('freeze').addEventListener('click',()=>action('/api/freeze',{frozen:!latestState?.freeze}));
 $('reset').addEventListener('click',()=>action('/api/reset'));
-const stream=new EventSource('/api/events');
-stream.addEventListener('audit',refresh);
-stream.onopen=()=>$('connection').textContent='● Live';
-stream.onerror=()=>$('connection').textContent='○ Reconnecting';
-refresh();
+setInterval(refresh,5000);
+setInterval(pollCodeRun,2000);

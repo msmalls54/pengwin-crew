@@ -1,0 +1,5 @@
+104-156-229-63.sslip.io {
+    encode zstd gzip
+    reverse_proxy web:8000
+    header Strict-Transport-Security "max-age=31536000"
+}

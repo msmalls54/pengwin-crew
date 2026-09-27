@@ -1,1 +1,1 @@
-"""Office Ops Crew: bounded agent workflows for a fictional company."""
+"""Pengwin Crew: bounded agent workflows for a fictional company."""

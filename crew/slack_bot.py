@@ -1,4 +1,4 @@
-"""Concierge: the only inbound Slack bot for the four-agent crew."""
+"""Concierge: slash commands and direct conversation with the crew lead."""
 
 from __future__ import annotations
 
@@ -18,8 +18,10 @@ from .db import Budget, ControlFlag, SessionLocal
 from .seed import seed_demo
 HELP = ("Mention Concierge with a plain-English request, such as 'please order 3 oat milk cartons "
         "and 2 coffee bags for Berlin,' or use `/crew order ...`. Include quantities and the office. "
+        "For a public RSVP event, use `/crew event <name, date, time, place/link, capacity>` or mention Events. "
+        "For a disposable Python task, use `/crew code <plain-English goal>`. "
         "The demo shortcuts are `/crew pantry`, `/crew welcome`, and `/crew hoodies`. "
-        "Use `/crew run <id>`, `/crew status`, or `/crew budgets` to check progress.")
+        "Use `/crew run <id>`, `/crew review <id>`, `/crew status`, or `/crew budgets` to check progress.")
 FLOW_COMMANDS = {"pantry": "berlin-pantry", "welcome": "welcome-kit", "hoodies": "hoodie-attack"}
 
 
@@ -71,7 +73,7 @@ def queue_allowed_flow(flow: str, *, user_id: str, channel_id: str,
         return "This Slack user is not allowed to run crew requests."
     if not is_demo_channel(channel_id):
         return "Crew requests are accepted only in the configured demo channel."
-    if flow == "natural-language" and (not request_text or len(request_text) > 1000):
+    if flow in {"natural-language", "luma-event", "eventbrite-event", "code-task"} and (not request_text or len(request_text) > 1000):
         return "Please include a request of at most 1,000 characters."
     if not claim_delivery(delivery_id):
         return "This Slack request was already received, or has no delivery ID. Send a new request if needed."
@@ -146,6 +148,26 @@ def handle_command(command: dict) -> str:
                                   delivery_id=("command:" + command["trigger_id"]) if command.get("trigger_id") else "")
     if action.startswith("run "):
         return run_status_text(action.removeprefix("run ").strip(), user_id=user_id)
+    if action.startswith("review "):
+        from .jobs import review_luma_run
+        return review_luma_run(action.removeprefix("review ").strip(), user_id=user_id)
+    if action.startswith("approve "):
+        from .jobs import approve_luma_run
+        parts = raw.split()
+        if len(parts) != 3 or not re.fullmatch(r"[0-9a-f]{12}", parts[2]):
+            return "Use /crew approve <run ID> <12-character draft snapshot>."
+        try:
+            run_id = str(UUID(parts[1]))
+        except ValueError:
+            return "Use the full run ID from the event draft."
+        return approve_luma_run(run_id, parts[2], user_id=user_id)
+    if action.startswith("reject "):
+        from .jobs import reject_luma_run
+        try:
+            run_id = str(UUID(raw.split(maxsplit=1)[1].strip()))
+        except ValueError:
+            return "Use the full run ID from the event draft."
+        return reject_luma_run(run_id, user_id=user_id)
     if action in ("status", "budgets"):
         if not is_slack_allowed(user_id):
             return "This Slack user is not allowed to read crew status."
@@ -170,6 +192,14 @@ def handle_command(command: dict) -> str:
         return f"Payments are now {'frozen' if frozen else 'unfrozen'}."
     if action in ("", "help"):
         return HELP
+    if action.startswith("event "):
+        return queue_allowed_flow("eventbrite-event", user_id=user_id, channel_id=channel_id,
+                                  delivery_id=("command:" + command["trigger_id"]) if command.get("trigger_id") else "",
+                                  request_text=raw[6:].strip())
+    if action.startswith("code "):
+        return queue_allowed_flow("code-task", user_id=user_id, channel_id=channel_id,
+                                  delivery_id=("command:" + command["trigger_id"]) if command.get("trigger_id") else "",
+                                  request_text=raw[5:].strip())
     request_text = raw[6:].strip() if action.startswith("order ") else raw
     return queue_allowed_flow("natural-language", user_id=user_id, channel_id=channel_id,
                               delivery_id=("command:" + command["trigger_id"]) if command.get("trigger_id") else "",
@@ -200,18 +230,16 @@ def build_app() -> App:
             say("This Slack user is not allowed to run crew requests.")
             return
         text = re.sub(r"<@[^>]+>", "", event.get("text", "")).strip()
-        if not text:
-            say(HELP)
-            return
-        flow = FLOW_COMMANDS.get(text.lower(), "natural-language")
-        say(queue_allowed_flow(flow, user_id=user_id, channel_id=channel_id,
-                               delivery_id=("event:" + body["event_id"]) if body.get("event_id") else "",
-                               request_text=text if flow == "natural-language" else None))
+        from .dialogue import answer
+        say(answer("Concierge", text, user_id=user_id, channel_id=channel_id,
+                   delivery_id=("event:" + body["event_id"]) if body.get("event_id") else ""))
 
     @bot.command("/crew")
-    def command(ack, respond, command):
+    def command(ack, client, command):
         ack()  # Slack requires this before slow model/browser work.
-        respond(handle_command(command))
+        client.chat_postEphemeral(channel=command["channel_id"],
+                                  user=command["user_id"],
+                                  text=handle_command(command))
 
     return bot
 

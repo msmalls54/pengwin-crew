@@ -19,9 +19,12 @@ from sqlalchemy.orm import Session
 from .audit import record
 from .config import settings
 from .db import AgentJob, ControlFlag, CrewRun, PendingOrder, Request, SessionLocal
+from .eventbrite import EventbriteClient, approval_preview as eventbrite_preview, checked_eventbrite_plan
 from .inference import VultrInference
 from .intake import checked_plan
+from .luma import LumaClient, LumaPlan, approval_preview, checked_luma_plan, plan_snapshot
 from .payments import pay_pending_order
+from .sandbox import sandbox
 from .slack_outbound import post_role_update
 from .workflow import (
     complete_berlin_lunch,
@@ -50,6 +53,9 @@ FLOW_LABELS = {
     "welcome-kit": "Berlin welcome",
     "hoodie-attack": "company hoodies",
     "natural-language": "your request",
+    "luma-event": "a Luma event draft",
+    "eventbrite-event": "a public RSVP event draft",
+    "code-task": "a sandboxed code task",
 }
 ITEM_LABELS = {
     "OAT-MILK": ("oat milk carton", "oat milk cartons"),
@@ -65,8 +71,8 @@ def flow_label(flow: str) -> str:
 
 ROLE_KINDS = {
     "Concierge": {"dispatch"},
-    "Buyer": {"purchase", "requote"},
-    "Events": {"lunch_prepare", "lunch_complete"},
+    "Buyer": {"purchase", "requote", "code_execute"},
+    "Events": {"lunch_prepare", "lunch_complete", "luma_publish", "eventbrite_publish"},
     "Treasurer": {"pay"},
 }
 UNCERTAIN_PAYMENT_STATUSES = {"PENDING_PROVIDER", "PROVIDER_OUTCOME_UNKNOWN"}
@@ -83,10 +89,10 @@ def _new_job(session: Session, *, run_id: str, role: str, kind: str, input_data:
 
 def submit_run(flow: str, *, source_user: str, channel_id: str,
                request_text: str | None = None) -> str:
-    if flow not in FLOW_STEPS and flow != "natural-language":
+    if flow not in FLOW_STEPS and flow not in {"natural-language", "luma-event", "eventbrite-event", "code-task"}:
         raise ValueError("Unknown crew flow")
-    if flow == "natural-language":
-        if settings.payment_mode != "simulated":
+    if flow in {"natural-language", "luma-event", "eventbrite-event", "code-task"}:
+        if flow == "natural-language" and settings.payment_mode != "simulated":
             raise ValueError("Natural-language requests require simulated payment mode")
         if not request_text or len(request_text) > 1000:
             raise ValueError("Request must contain at most 1000 characters")
@@ -113,6 +119,51 @@ def submit_run(flow: str, *, source_user: str, channel_id: str,
     return run_id
 
 
+def submit_web_code_run(goal: str) -> str:
+    """A token-authenticated web user may queue only offline code work."""
+    if settings.sandbox_mode != "docker" or settings.planner_mode != "vultr":
+        raise ValueError("Web code tasks require Vultr inference and the Docker sandbox VM")
+    if not goal.strip() or len(goal) > 1000:
+        raise ValueError("Goal must contain 1–1000 characters")
+    with SessionLocal.begin() as session:
+        prior = session.execute(select(CrewRun.id).where(
+            CrewRun.source_user == "web-demo",
+        ).limit(30)).all()
+        if len(prior) >= 30:
+            raise ValueError("Web demo run limit reached")
+        run_id = str(uuid4())
+        session.add(CrewRun(id=run_id, flow="code-task", source_user="web-demo",
+                            channel_id="web", status="QUEUED"))
+        session.flush()
+        _new_job(session, run_id=run_id, role="Concierge", kind="dispatch",
+                 input_data={"flow": "code-task", "text": goal.strip()})
+        record(session, agent="Concierge", action="web_code_queued", request_id=run_id,
+               detail={"goal_chars": len(goal.strip())})
+    return run_id
+
+
+def submit_web_demo_run(flow: str) -> str:
+    if flow not in FLOW_STEPS:
+        raise ValueError("Unknown demo flow")
+    if settings.payment_mode != "simulated":
+        raise ValueError("Web demo flows require simulated payment mode")
+    with SessionLocal.begin() as session:
+        prior = session.execute(select(CrewRun.id).where(
+            CrewRun.source_user == "web-admin",
+        ).limit(30)).all()
+        if len(prior) >= 30:
+            raise ValueError("Web demo run limit reached")
+        run_id = str(uuid4())
+        session.add(CrewRun(id=run_id, flow=flow, source_user="web-admin",
+                            channel_id="web", status="QUEUED"))
+        session.flush()
+        _new_job(session, run_id=run_id, role="Concierge", kind="dispatch",
+                 input_data={"flow": flow})
+        record(session, agent="Concierge", action="web_demo_queued", request_id=run_id,
+               detail={"flow": flow})
+    return run_id
+
+
 def get_run(run_id: str) -> dict | None:
     with SessionLocal() as session:
         run = session.get(CrewRun, run_id)
@@ -131,6 +182,74 @@ def get_run(run_id: str) -> dict | None:
                 "error": job.error,
             } for job in jobs],
         }
+
+
+def _approval_job(session: Session, run_id: str) -> tuple[CrewRun | None, AgentJob | None]:
+    run = session.execute(select(CrewRun).where(CrewRun.id == run_id).with_for_update()).scalar_one_or_none()
+    if run is None or run.flow not in {"luma-event", "eventbrite-event"}:
+        return run, None
+    job = session.execute(select(AgentJob).where(
+        AgentJob.run_id == run_id,
+        AgentJob.kind == ("luma_publish" if run.flow == "luma-event" else "eventbrite_publish"),
+        AgentJob.status == "WAITING_APPROVAL",
+    ).with_for_update()).scalar_one_or_none()
+    return run, job
+
+
+def review_luma_run(run_id: str, *, user_id: str) -> str:
+    if not _admin_user(user_id):
+        return "Only a configured crew admin can review event details."
+    with SessionLocal() as session:
+        run, job = _approval_job(session, run_id)
+        if run is None or job is None:
+            return "No event draft is waiting for approval under that run ID."
+        plan = LumaPlan.model_validate(json.loads(job.input_json)["plan"])
+        return (eventbrite_preview if run.flow == "eventbrite-event" else approval_preview)(run_id, plan)
+
+
+def approve_luma_run(run_id: str, snapshot: str, *, user_id: str) -> str:
+    if not _admin_user(user_id):
+        return "Only a configured crew admin can approve an event."
+    with SessionLocal.begin() as session:
+        run, job = _approval_job(session, run_id)
+        if run is None or job is None or run.status != "WAITING_APPROVAL":
+            return "No event draft is waiting for approval under that run ID."
+        if run.flow == "luma-event" and os.getenv("LUMA_ENABLED", "false").lower() != "true":
+            return "Luma publishing is not ready. The draft remains waiting; configure a Plus calendar key first."
+        if run.flow == "eventbrite-event" and os.getenv("EVENTBRITE_ENABLED", "false").lower() != "true":
+            return "Eventbrite publishing is not ready. The draft remains waiting; configure its organizer credentials first."
+        data = json.loads(job.input_json)
+        if data["snapshot"] != snapshot:
+            return "The draft snapshot does not match. Use /crew review <run ID> before approving."
+        plan = LumaPlan.model_validate(data["plan"])
+        if plan.start_at <= datetime.now(timezone.utc):
+            return "The event start time has passed. Submit a fresh request."
+        data["approved_by"] = user_id
+        data["approved_snapshot"] = snapshot
+        job.input_json = json.dumps(data, sort_keys=True)
+        job.status = "QUEUED"
+        job.updated_at = datetime.now(timezone.utc)
+        run.status = "RUNNING"
+        record(session, agent="Control", action="event_approved", request_id=run_id,
+               detail={"approver": user_id, "snapshot": snapshot})
+    provider = "Eventbrite" if run.flow == "eventbrite-event" else "Luma"
+    return f"Approved draft {snapshot}. Events is creating the {provider} event; no duplicate submission will be retried automatically."
+
+
+def reject_luma_run(run_id: str, *, user_id: str) -> str:
+    if not _admin_user(user_id):
+        return "Only a configured crew admin can reject an event."
+    with SessionLocal.begin() as session:
+        run, job = _approval_job(session, run_id)
+        if run is None or job is None or run.status != "WAITING_APPROVAL":
+            return "No event draft is waiting for approval under that run ID."
+        job.status = "HELD"
+        job.updated_at = datetime.now(timezone.utc)
+        run.status = "REJECTED"
+        run.completed_at = datetime.now(timezone.utc)
+        record(session, agent="Control", action="event_rejected", request_id=run_id,
+               detail={"reviewer": user_id})
+    return "Event draft rejected. No event was published or invitation sent."
 
 
 def claim_next_job(role: str) -> str | None:
@@ -183,6 +302,8 @@ def _refresh_run(session: Session, run_id: str) -> None:
         run.status = "FAILED"
     elif "HELD" in statuses:
         run.status = "HELD"
+    elif "WAITING_APPROVAL" in statuses:
+        run.status = "WAITING_APPROVAL"
     elif any(status in {"QUEUED", "RUNNING"} for status in statuses):
         run.status = "RUNNING"
     else:
@@ -222,6 +343,30 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
         raise ValueError("Job kind exceeds role capability")
     data = json.loads(job.input_json)
     if job.role == "Concierge":
+        if run.flow == "code-task":
+            return {}, [("Buyer", "code_execute", {"goal": data["text"]})], (
+                f"Run {run.id}: Buyer is running this in a disposable, offline code container. "
+                "I’ll report what actually ran and what it printed."
+            ), False
+        if run.flow in {"luma-event", "eventbrite-event"}:
+            try:
+                candidate = VultrInference().luma_event_plan(request_text=data["text"])
+                checker = checked_eventbrite_plan if run.flow == "eventbrite-event" else checked_luma_plan
+                plan = checker(candidate, data["text"])
+            except ValueError as exc:
+                return {"clarification": str(exc)}, [], (
+                    f"Run {run.id}: {exc}. No event was published or invitation sent."
+                ), False
+            if plan.clarification:
+                return {"clarification": plan.clarification}, [], (
+                    f"Run {run.id}: {plan.clarification} No event was published or invitation sent."
+                ), False
+            snapshot = plan_snapshot(plan)
+            public = run.flow == "eventbrite-event"
+            return {"snapshot": snapshot, "guest_count": len(plan.guests)}, [
+                ("Events", "eventbrite_publish" if public else "luma_publish",
+                 {"plan": plan.model_dump(mode="json"), "snapshot": snapshot})
+            ], (eventbrite_preview if public else approval_preview)(run.id, plan), False
         if run.flow == "natural-language":
             try:
                 plan = checked_plan(
@@ -251,16 +396,51 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
                 summary += (", " if summary else "") + f"Berlin lunch for {plan.lunch_headcount}"
             return plan.model_dump(), steps, (
                 f"Run {run.id}: Got it — {summary}. I've sent the details to the crew. "
-                "Nobody gets to freestyle the quantity; Treasurer checks the budget before a simulated payment."
+                "Buyer checks the order; Treasurer checks the budget."
             ), False
         steps = FLOW_STEPS[run.flow]
         return {"steps": len(steps)}, list(steps), (
             f"Run {run.id}: On it — {flow_label(run.flow)} is split into {len(steps)} tasks. "
             "I'm keeping the chaos in one thread."
         ), False
+    if job.role == "Buyer" and job.kind == "code_execute":
+        if settings.sandbox_mode != "docker":
+            raise RuntimeError("Code tasks require the isolated Docker sandbox VM")
+        goal = data["goal"]
+        planner = VultrInference()
+        draft = planner.code_draft(goal=goal)
+        attempts = []
+        for index in range(2):
+            result = sandbox().execute_code(draft.code, {"goal": goal})
+            exit_code = result.get("exit_code")
+            if not isinstance(exit_code, int):
+                raise RuntimeError("Sandbox did not return a valid exit code")
+            code_hash = hashlib.sha256(draft.code.encode()).hexdigest()[:12]
+            attempts.append({"code": draft.code, "code_hash": code_hash,
+                             "exit_code": exit_code, "stdout": str(result.get("stdout", ""))[:10_000],
+                             "stderr": str(result.get("stderr", ""))[:4_000]})
+            with SessionLocal.begin() as session:
+                record(session, agent="Buyer", action="sandbox_code_attempt", request_id=run.id,
+                       detail={"attempt": index + 1, "code_hash": code_hash,
+                               "exit_code": exit_code})
+            if exit_code == 0:
+                output = attempts[-1]["stdout"].strip() or "(no stdout)"
+                printable = "".join(c for c in output if c.isprintable() or c in "\n\t")[:900]
+                return {"attempts": attempts, "result": output}, [], (
+                    f"Run {run.id}: Buyer executed Python in the offline sandbox. "
+                    f"Exit 0 after {index + 1} attempt(s); code hash {code_hash}. "
+                    f"Actual output: {printable}"
+                ), False
+            if index == 0:
+                draft = planner.code_draft(goal=goal, previous_code=draft.code,
+                                           stderr=attempts[-1]["stderr"])
+        return {"attempts": attempts}, [], (
+            f"Run {run.id}: Buyer ran the code twice in fresh sandboxes. Both attempts failed; "
+            "the run is held for review. No provider action was made."
+        ), True
     if job.role == "Buyer" and job.kind == "purchase":
         prepared = prepare_purchase(**data, source="slack", source_user=run.source_user)
-        message = (f"Run {run.id}: The fictional store had its say. I checked the numbers: "
+        message = (f"Run {run.id}: I checked the numbers: "
                    f"{_item_phrase(prepared['proposed_sku'], prepared['proposed_qty'])} "
                    f"for {_money(prepared['amount_cents'], prepared['currency'])}. "
                    "Treasurer gets the final word.")
@@ -290,6 +470,49 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
             f"Run {run.id}: The lunch draft now shows {data['payment_status']}. "
             "The invite is ready; the venue still hasn't confirmed a reservation."
         ), False
+    if job.role == "Events" and job.kind == "luma_publish":
+        if not data.get("approved_by") or data.get("approved_snapshot") != data.get("snapshot"):
+            raise ValueError("Luma draft has no matching human approval")
+        plan = LumaPlan.model_validate(data["plan"])
+        client = LumaClient()
+        event_id = client.create_event(plan)
+        # Persist the provider ID before inviting anyone. If invitation delivery
+        # fails or times out, this run is held for reconciliation, not replayed.
+        with SessionLocal.begin() as session:
+            persisted = session.get(AgentJob, job.id)
+            persisted.output_json = json.dumps({"event_id": event_id, "invites": "PENDING"})
+            record(session, agent="Events", action="luma_event_created", request_id=run.id,
+                   detail={"event_id": event_id, "guest_count": len(plan.guests)})
+        skipped = client.send_invites(event_id, plan.guests)
+        return {"event_id": event_id, "guest_count": len(plan.guests),
+                "skipped_count": len(skipped)}, [], (
+            f"Run {run.id}: Luma created event {event_id}. Invitations were requested for "
+            f"{len(plan.guests)} guest(s); {len(skipped)} were skipped by Luma. "
+            "Check the event guest list for final delivery status."
+        ), False
+    if job.role == "Events" and job.kind == "eventbrite_publish":
+        if not data.get("approved_by") or data.get("approved_snapshot") != data.get("snapshot"):
+            raise ValueError("Eventbrite draft has no matching human approval")
+        plan = LumaPlan.model_validate(data["plan"])
+        client = EventbriteClient()
+        event_id = client.create_draft(plan)
+        with SessionLocal.begin() as session:
+            persisted = session.get(AgentJob, job.id)
+            persisted.output_json = json.dumps({"event_id": event_id, "stage": "DRAFT"})
+            record(session, agent="Events", action="eventbrite_draft_created", request_id=run.id,
+                   detail={"event_id": event_id, "capacity": plan.capacity})
+        ticket_id = client.create_free_ticket(event_id, plan.capacity)
+        with SessionLocal.begin() as session:
+            persisted = session.get(AgentJob, job.id)
+            persisted.output_json = json.dumps({"event_id": event_id, "ticket_id": ticket_id,
+                                                "stage": "TICKET_CREATED"})
+            record(session, agent="Events", action="eventbrite_free_ticket_created", request_id=run.id,
+                   detail={"event_id": event_id, "ticket_id": ticket_id})
+        url = client.publish(event_id)
+        return {"event_id": event_id, "ticket_id": ticket_id, "url": url}, [], (
+            f"Run {run.id}: Eventbrite published a free RSVP page for {plan.capacity} people: {url}. "
+            "The registration page is live; no individual invitation email was sent."
+        ), False
     if job.role == "Treasurer" and job.kind == "pay":
         payment = pay_pending_order(data["order_id"], is_admin=_admin_user(run.source_user))
         result = {"request_id": data["request_id"], "order_id": data["order_id"],
@@ -317,8 +540,8 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
                        "Airwallex has it; settlement is not confirmed.")
         elif payment.status == "SIMULATED":
             message = (f"Run {run.id}: Budget says yes. I recorded "
-                       f"{_money(payment.amount_cents, payment.currency)} as a simulated payment. "
-                       "Vibes are not a wire transfer; no actual payment was sent.")
+                       f"a {_money(payment.amount_cents, payment.currency)} demo checkout. "
+                       "Order receipt is in the run record.")
         elif next_jobs and next_jobs[0][1] == "requote":
             message = f"Run {run.id}: policy blocked {payment.blocked_rule}; Buyer is preparing a corrected quote."
         else:
@@ -330,6 +553,10 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
 
 def _notify(run_id: str, role: str, message: str) -> None:
     key = "crew_thread_" + hashlib.sha256(run_id.encode()).hexdigest()[:24]
+    with SessionLocal() as session:
+        target = session.get(CrewRun, run_id)
+        if target and target.channel_id == "web":
+            return
     try:
         with SessionLocal() as session:
             run = session.get(CrewRun, run_id)
@@ -346,8 +573,6 @@ def _notify(run_id: str, role: str, message: str) -> None:
         with SessionLocal.begin() as session:
             record(session, agent=role, action="slack_update_failed", request_id=run_id,
                    detail={"error_type": type(exc).__name__}, severity="error")
-
-
 def run_one_job(role: str) -> bool:
     """Process one queued job for this role. Returns False when no job is ready."""
     job_id = claim_next_job(role)
@@ -373,8 +598,10 @@ def run_one_job(role: str) -> bool:
                 _stop_run(session, run_id, status="HELD")
             else:
                 for next_role, kind, input_data in successors:
-                    _new_job(session, run_id=run_id, role=next_role, kind=kind,
-                             input_data=input_data)
+                    next_job = _new_job(session, run_id=run_id, role=next_role, kind=kind,
+                                        input_data=input_data)
+                    if kind in {"luma_publish", "eventbrite_publish"}:
+                        next_job.status = "WAITING_APPROVAL"
                 _refresh_run(session, run_id)
             record(session, agent=role, action="agent_job_held" if hold else "agent_job_done",
                    request_id=run_id, detail={"job_id": job_id, "kind": job.kind,
@@ -384,10 +611,13 @@ def run_one_job(role: str) -> bool:
         with SessionLocal.begin() as session:
             persisted = session.get(AgentJob, job_id)
             if persisted and persisted.status == "RUNNING":
-                persisted.status = "HELD" if role == "Treasurer" else "FAILED"
+                provider_mutation = role == "Treasurer" or persisted.kind in {
+                    "luma_publish", "eventbrite_publish",
+                }
+                persisted.status = "HELD" if provider_mutation else "FAILED"
                 persisted.error = type(exc).__name__
                 persisted.updated_at = datetime.now(timezone.utc)
-                _stop_run(session, run_id, status="HELD" if role == "Treasurer" else "FAILED")
+                _stop_run(session, run_id, status="HELD" if provider_mutation else "FAILED")
                 record(session, agent=role, action="agent_job_failed", request_id=run_id,
                        detail={"job_id": job_id, "kind": job.kind,
                                "error_type": type(exc).__name__}, severity="error")
