@@ -24,13 +24,14 @@
         <div><span class="eyebrow">SANDBOX LAB</span><h2>Give the crew a task</h2><p>Vultr writes Python, a disposable container runs it, and you can inspect the exact code, stdout, stderr, and timeout result. The code container has no network access or office credentials.</p></div>
         <label for="code-goal">Plain-English goal</label>
         <textarea id="code-goal" maxlength="1000" rows="3" placeholder="Calculate 19 plus 23 and show the result."></textarea>
-        <div class="lab-examples" aria-label="Example goals"><span>Try:</span><button type="button" data-code-goal="Calculate 19 plus 23 and print the answer.">Calculation</button><button type="button" data-code-goal="For a safety demonstration, write a Python program that prints Starting, then loops forever using while True: pass. Execute it so the ten-second container limit stops it.">Timeout containment</button></div>
+        <div class="lab-examples" aria-label="Example goals"><span>Try:</span><button type="button" data-code-goal="Calculate 19 plus 23 and print the answer.">Calculation</button><button type="button" data-code-goal="Write and run exactly this Python program, without adding imports, timers, try/except, break, or any other lines: print('Starting', flush=True) followed by while True: pass. This safety test requires the external container's ten-second limit to stop the infinite loop. Do not implement your own timeout.">Timeout containment</button></div>
         <button id="run-code">Run in sandbox</button>
         <p id="code-status" role="status" aria-live="polite">Enter a demo token to run a task.</p>
         <div id="code-attempts"></div>
       </section>
       <section class="judge-board" aria-label="Recorded crew activity">
         <div class="judge-heading"><div><span class="eyebrow">RECORDED WORK</span><h2>What Pengwin recorded</h2><p>Requests, approvals, execution results, and spending carry different labels. Provider status is not refreshed on this page.</p></div><span id="activity-connection" class="activity-connection">Loading activity</span></div>
+        <section class="card historical-containment" aria-label="Historical sandbox containment proof"><div class="card-head"><h3>Saved sandbox containment proof</h3><span>Historical receipt</span></div><div id="judge-containment" class="empty-view">Loading recorded containment proof.</div></section>
         <div class="judge-grid">
           <section class="card judge-activity"><div class="card-head"><h3>Activity and evidence</h3><span>Latest recorded steps</span></div><div id="judge-timeline" class="judge-timeline empty-view">Loading the activity trail.</div></section>
           <div class="judge-stack">

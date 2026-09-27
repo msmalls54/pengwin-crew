@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import re
@@ -19,6 +20,7 @@ from .audit import record
 from .config import settings
 from .db import AgentJob, AuditEvent, Budget, ControlFlag, CrewRun, Payment, PendingOrder, Request, SessionLocal, Task, Vendor
 from .inference import VultrInference
+from .sandbox import is_reported_timeout
 from .seed import seed_demo
 
 
@@ -244,9 +246,19 @@ def _judge_event(event: AuditEvent) -> dict | None:
                 or type(exit_code) is not int or not -255 <= exit_code <= 255
                 or not isinstance(code_hash, str) or not re.fullmatch(r"[0-9a-f]{12}", code_hash)):
             return None
-        status = "contained" if exit_code == 124 else "complete" if exit_code == 0 else "failed"
-        title = "Code attempt contained" if exit_code == 124 else "Code attempt executed"
+        timeout_reported = detail.get("timeout_reported")
+        if exit_code == 124 and timeout_reported is True:
+            status, title = "contained", "Code attempt contained"
+        elif exit_code == 124 and timeout_reported is not False:
+            status, title = "held", "Code attempt exited 124"
+        elif exit_code == 0:
+            status, title = "complete", "Code attempt executed"
+        else:
+            status, title = "failed", "Code attempt failed"
         proof = f"Attempt {attempt} · exit {exit_code} · SHA-256 prefix {code_hash}"
+        if exit_code == 124 and timeout_reported is not True:
+            proof += (" · worker timeout marker absent" if timeout_reported is False else
+                      " · timeout status not stored in this older audit")
     elif event.action == "payment_submitted":
         if detail.get("simulated") is True:
             title, status, proof = "Demo checkout recorded", "simulated", "Local simulation; no real charge."
@@ -356,8 +368,57 @@ def _judge_product_estimate(job: AgentJob) -> dict | None:
             "source_url": "https://www.printful.com/custom-water-bottles"}
 
 
+def _historical_containment_proof(session: Session) -> dict | None:
+    """Pin a verified web-demo timeout even after it leaves the recent timeline.
+
+    Audit events from Slack runs can carry private run IDs, so only a matching
+    web-demo code run may contribute to this public projection.
+    """
+    rows = session.execute(
+        select(AuditEvent, CrewRun, AgentJob).join(CrewRun, AuditEvent.request_id == CrewRun.id)
+        .join(AgentJob, AgentJob.run_id == CrewRun.id)
+        .where(AuditEvent.agent == "Buyer", AuditEvent.action == "sandbox_code_attempt",
+               CrewRun.flow == "code-task", CrewRun.source_user == "web-demo",
+               CrewRun.channel_id == "web", CrewRun.status == "HELD",
+               AgentJob.role == "Buyer", AgentJob.kind == "code_execute",
+               AgentJob.status == "HELD")
+        .order_by(AuditEvent.id.desc())
+    ).yield_per(100)
+    for event, run, job in rows:
+        if not isinstance(run.id, str) or not re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", run.id
+        ):
+            continue
+        try:
+            detail = json.loads(event.detail_json)
+            attempts = json.loads(job.output_json)["attempts"]
+            attempt = attempts[detail["attempt"] - 1]
+            code = attempt["code"]
+            matching_receipt = (type(detail["attempt"]) is int
+                                and isinstance(attempts, list)
+                                and 1 <= detail["attempt"] <= len(attempts) <= 2
+                                and isinstance(attempt, dict)
+                                and isinstance(code, str)
+                                and type(attempt.get("exit_code")) is int
+                                and attempt["exit_code"] == 124
+                                and is_reported_timeout(attempt)
+                                and attempt.get("code_hash") == detail["code_hash"]
+                                and hashlib.sha256(code.encode()).hexdigest()[:12] == detail["code_hash"])
+        except (AttributeError, IndexError, KeyError, TypeError, UnicodeError, ValueError):
+            continue
+        if matching_receipt:
+            return {
+                "recorded_at": _utc_iso(event.ts), "run_id": run.id,
+                "audit_event_id": event.id, "role": "Buyer",
+                "status": "contained",
+                "evidence": f"Attempt {detail['attempt']} · exit 124 · SHA-256 prefix {detail['code_hash']}",
+                "source": "Saved Buyer sandbox audit and matching worker receipt for a web demo code run",
+            }
+    return None
+
+
 def _judge_activity_payload():
-    """A fixed public projection with no request text, identifiers, or credentials."""
+    """A fixed projection with no private request, user, channel, or credential data."""
     with SessionLocal() as session:
         rows = session.execute(select(AuditEvent).order_by(AuditEvent.id.desc()).limit(160)).scalars().all()
         activity = [item for row in rows if (item := _judge_event(row)) is not None][:36]
@@ -376,6 +437,7 @@ def _judge_activity_payload():
         ).order_by(AgentJob.updated_at.desc(), AgentJob.id.desc()).limit(20)).scalars().all()
         product_estimate = next((item for job in product_sources
                                  if (item := _judge_product_estimate(job)) is not None), None)
+        containment_proof = _historical_containment_proof(session)
         counter = session.get(ControlFlag, "vultr_calls")
     try:
         attempted_calls = max(0, int(counter.value)) if counter else 0
@@ -384,6 +446,7 @@ def _judge_activity_payload():
     return {
         "as_of": datetime.now(timezone.utc).isoformat(),
         "activity": activity,
+        "historical_containment": containment_proof,
         "runs": runs,
         "spend": {
             "proposed_mock_orders": proposed,

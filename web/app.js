@@ -64,6 +64,23 @@ function render(state) {
 
 function renderJudge(data) {
   $('activity-connection').textContent=`● Read only · updated ${readableTime(data.as_of)}`;
+  const proof=data.historical_containment;
+  const proofBox=$('judge-containment');
+  if(proof?.status==='contained'){
+    proofBox.classList.remove('empty-view');
+    const lead=node('div','historical-proof-head');
+    lead.append(node('strong','','Ten-second container limit enforced'),node('span','proof-status contained','Contained'));
+    const recorded=node('time','',`Recorded ${readableTime(proof.recorded_at)} · saved result, not a current run`);
+    recorded.dateTime=proof.recorded_at;
+    const inspect=node('button','historical-load','Inspect full trace with demo token');
+    inspect.type='button';
+    inspect.addEventListener('click',()=>loadHistoricalCodeRun(proof.run_id));
+    proofBox.replaceChildren(lead,recorded,node('p','judge-proof',proof.evidence),
+      node('p','historical-source',`${proof.source} · run ${proof.run_id} · audit event ${proof.audit_event_id}`),inspect);
+  } else {
+    proofBox.classList.add('empty-view');
+    proofBox.replaceChildren(node('p','','No verified containment receipt has been recorded yet.'));
+  }
   const events=data.activity||[];
   $('judge-timeline').classList.toggle('empty-view',events.length===0);
   $('judge-timeline').replaceChildren(...(events.length ? events.map(event=>{
@@ -202,6 +219,18 @@ async function pollCodeRun() {
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     renderCodeRun(await response.json());
   } catch(error) { $('code-status').textContent=`Could not read run: ${error.message}`; }
+}
+
+async function loadHistoricalCodeRun(runId) {
+  adminToken=$('token').value.trim();
+  if(!adminToken){
+    $('code-status').textContent='Enter the private demo token to inspect this recorded run.';
+    $('token').focus();
+    return;
+  }
+  activeCodeRun=runId;
+  await pollCodeRun();
+  $('code-status').scrollIntoView({behavior:'smooth',block:'center'});
 }
 
 async function runCode() {

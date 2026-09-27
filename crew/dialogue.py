@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import httpx
 from sqlalchemy import func, select
 
 from .db import Payment, SessionLocal
@@ -16,6 +18,9 @@ from .project_planner import (SourcingProposal, generic_sourcing_proposal,
 from .research import ResearchResult, lookup_project_facts
 from .slack_bot import (FLOW_COMMANDS, latest_run_status_text, queue_allowed_flow,
                         run_status_text, status_text)
+
+
+_log = logging.getLogger(__name__)
 
 
 def _period(text: str, now: datetime) -> tuple[str, datetime | None, datetime | None]:
@@ -273,7 +278,10 @@ def answer(role: str, text: str, *, user_id: str, channel_id: str,
         if search_result and search_result.status != "ok" and "live search" not in reply.casefold():
             reply += " Live search is unavailable, so current external details remain unverified."
         return reply[:1500]
-    except Exception:
+    except Exception as exc:
         # A model outage should not pretend a task or factual answer succeeded.
+        status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else "-"
+        _log.warning("role_reply_unavailable role=%s error_type=%s http_status=%s",
+                     role, type(exc).__name__, status)
         return ("I can't think through that request right now. Try again in a moment, "
                 "or give me a specific office task to queue.")

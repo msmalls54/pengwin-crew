@@ -29,7 +29,7 @@ from .inference import VultrInference
 from .intake import checked_plan
 from .luma import LumaClient, LumaPlan, approval_preview, checked_luma_plan, plan_snapshot
 from .payments import pay_pending_order
-from .sandbox import sandbox
+from .sandbox import is_reported_timeout, sandbox
 from .slack_outbound import post_role_update
 from .web_limits import reserve_web_run_slot
 from .workflow import (
@@ -911,16 +911,18 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
         for index in range(2):
             result = sandbox().execute_code(draft.code, {"goal": goal})
             exit_code = result.get("exit_code")
-            if not isinstance(exit_code, int):
+            if type(exit_code) is not int:
                 raise RuntimeError("Sandbox did not return a valid exit code")
+            timeout_reported = is_reported_timeout(result)
             code_hash = hashlib.sha256(draft.code.encode()).hexdigest()[:12]
             attempts.append({"code": draft.code, "code_hash": code_hash,
                              "exit_code": exit_code, "stdout": str(result.get("stdout", ""))[:10_000],
-                             "stderr": str(result.get("stderr", ""))[:4_000]})
+                             "stderr": str(result.get("stderr", ""))[:4_000],
+                             "timeout_reported": timeout_reported})
             with SessionLocal.begin() as session:
                 record(session, agent="Buyer", action="sandbox_code_attempt", request_id=run.id,
                        detail={"attempt": index + 1, "code_hash": code_hash,
-                               "exit_code": exit_code})
+                               "exit_code": exit_code, "timeout_reported": timeout_reported})
             if exit_code == 0:
                 output = attempts[-1]["stdout"].strip() or "(no stdout)"
                 printable = "".join(c for c in output if c.isprintable() or c in "\n\t")[:900]
@@ -929,14 +931,14 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
                     + (" and fixed an error on the second try" if index else "")
                     + f". It printed:\n{printable}"
                 ), False
-            if exit_code == 124:
+            if timeout_reported:
                 return {"attempts": attempts}, [], (
                     "I stopped that code after 10 seconds. The isolated workspace was removed, "
                     "so it couldn't keep running or affect the rest of Pengwin."
                 ), True
             if index == 0:
                 draft = planner.code_draft(goal=goal, previous_code=draft.code,
-                                           stderr=attempts[-1]["stderr"])
+                                           stderr=attempts[-1]["stderr"] or f"Process exited with code {exit_code}.")
         return {"attempts": attempts}, [], (
             "I tried twice in fresh, isolated workspaces. Both attempts failed, so I stopped. "
             "Ask me to try a different approach."

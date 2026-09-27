@@ -6,6 +6,15 @@ from .catalog import ATTACK_TEXT, PRODUCTS
 from .config import settings
 
 
+SANDBOX_TIMEOUT_STDERR = "Execution timed out after 10 seconds"
+
+
+def is_reported_timeout(result: dict) -> bool:
+    """Recognize the existing sandbox worker's timeout response, not exit 124 alone."""
+    return (type(result.get("exit_code")) is int and result["exit_code"] == 124
+            and result.get("stderr") == SANDBOX_TIMEOUT_STDERR)
+
+
 class LocalCatalogSandbox:
     """Development-only stand-in. UI labels all outcomes from this path as local simulation."""
 

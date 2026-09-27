@@ -404,3 +404,88 @@ with SessionLocal() as session:
     result = subprocess.run([sys.executable, "-c", script], env=env,
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
+
+
+def test_concierge_negated_purchase_unconfirmed_recap_stays_read_only(tmp_path):
+    env = os.environ.copy()
+    env.update({
+        "DATABASE_URL": f"sqlite:///{tmp_path / 'concierge-recap.db'}",
+        "PAYMENT_MODE": "simulated", "PLANNER_MODE": "deterministic",
+        "SANDBOX_MODE": "local", "SLACK_DEMO_CHANNEL_ID": "C_DEMO",
+        "SLACK_ALLOWED_USER_IDS": "U_OWNER", "SLACK_ADMIN_USER_IDS": "",
+        "SLACK_CONCIERGE_BOT_TOKEN": "test-concierge", "SLACK_APP_TOKEN": "test-app",
+    })
+    script = '''
+import json
+from uuid import uuid4
+from sqlalchemy import func, select
+from crew.db import AgentJob, CrewRun, SessionLocal, init_db
+from crew.memory import create_or_update_project, is_project_recall_request
+from crew import dialogue, slack_bot
+
+init_db()
+run_id = str(uuid4())
+with SessionLocal.begin() as session:
+    session.add(CrewRun(id=run_id, flow='project-plan', source_user='U_OWNER',
+                        channel_id='C_DEMO', status='COMPLETE'))
+create_or_update_project(run_id=run_id, owner_user_id='U_OWNER', channel_id='C_DEMO',
+    thread_root_ts='100.001', name='Salesforce Park gathering', safe_plan={
+        'event':{'title':'SF gathering','venue_name':'Salesforce Park'},
+        'swag':{'quantity':24}, 'invitations':{'audience_phrase':'local founders'}},
+    status='ACTIVE')
+with SessionLocal.begin() as session:
+    for role, kind, output in (
+        ('Events','event_research',{'venue_status':'UNCONFIRMED',
+            'eventbrite_status':'NOT_CREATED','invitation_status':'DRAFT_ONLY'}),
+        ('Buyer','product_source',{'publisher_status':'ok',
+            'source_url':'https://www.printful.com/custom-water-bottles',
+            'currency':'USD','unit_min':20.25,'unit_max':23.41,
+            'subtotal_min':486.00,'subtotal_max':561.84,'checkout_status':'NOT_READY'}),
+        ('Treasurer','budget_review',{'review_status':'ESTIMATE_ONLY',
+            'payment_status':'NONE','reserved_cents':0}),
+    ):
+        session.add(AgentJob(id=str(uuid4()), run_id=run_id, role=role, kind=kind,
+                             input_json='{}', output_json=json.dumps(output), status='DONE'))
+class FakeApp:
+    def __init__(self, *, token):
+        self.events = {}
+    def event(self, name):
+        def decorate(fn):
+            self.events[name] = fn
+            return fn
+        return decorate
+    def command(self, name):
+        return lambda fn: fn
+slack_bot.App = FakeApp
+def forbidden_answer(*args, **kwargs):
+    raise AssertionError('recap must not call a model or queue work')
+dialogue.answer = forbidden_answer
+replies = []
+def say(**options):
+    replies.append(options)
+    return {'ts':'900.001'}
+request = ('Codex post-release guard test: do not buy any more water bottles for this plan. '
+           'Please summarize what remains unconfirmed. Planning only; no checkout, payment, '
+           'booking, publishing, or invitations.')
+assert is_project_recall_request(request)
+assert not dialogue._looks_like_purchase(request)
+with SessionLocal() as session:
+    before_runs = session.scalar(select(func.count()).select_from(CrewRun))
+    before_jobs = session.scalar(select(func.count()).select_from(AgentJob))
+mention = slack_bot.build_app().events['app_mention']
+mention({'user':'U_OWNER','channel':'C_DEMO','ts':'100.002','thread_ts':'100.001',
+         'text':'<@Concierge> ' + request}, {'event_id':'guard-recap'}, say)
+reply = replies[-1]['text']
+assert '24 water bottles' in reply and '$486.00–$561.84' in reply
+assert 'Venue availability and booking are unconfirmed' in reply
+assert 'Invitations: draft only' in reply
+assert 'Checkout is not ready' in reply
+assert 'no funds reserved or payment action' in reply
+assert replies[-1]['thread_ts'] == '100.001'
+with SessionLocal() as session:
+    assert session.scalar(select(func.count()).select_from(CrewRun)) == before_runs
+    assert session.scalar(select(func.count()).select_from(AgentJob)) == before_jobs
+'''
+    result = subprocess.run([sys.executable, "-c", script], env=env,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr

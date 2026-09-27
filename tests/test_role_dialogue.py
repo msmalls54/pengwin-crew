@@ -82,3 +82,38 @@ assert len(calls) == before
 '''
     result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
+
+
+def test_role_reply_failure_logs_safe_type_and_status_only(tmp_path):
+    env = os.environ.copy()
+    env.update({"DATABASE_URL": f"sqlite:///{tmp_path / 'role-error.db'}"})
+    script = r'''
+import io
+import logging
+import httpx
+from crew import dialogue
+
+stream = io.StringIO()
+handler = logging.StreamHandler(stream)
+logger = logging.getLogger('crew.dialogue')
+logger.addHandler(handler)
+logger.setLevel(logging.WARNING)
+request = httpx.Request('POST', 'https://example.test/chat/completions')
+response = httpx.Response(503, request=request)
+class FailedInference:
+    def role_reply(self, **kwargs):
+        raise httpx.HTTPStatusError('private-provider-response', request=request,
+                                    response=response)
+dialogue.VultrInference = FailedInference
+reply = dialogue.answer('Concierge', 'Hi private-user-message', user_id='U_OWNER',
+                        channel_id='C_DEMO', delivery_id='event:role-error')
+assert "can't think through" in reply
+log = stream.getvalue()
+assert 'role_reply_unavailable role=Concierge' in log, log
+assert 'error_type=HTTPStatusError http_status=503' in log, log
+assert 'private-provider-response' not in log
+assert 'private-user-message' not in log
+'''
+    result = subprocess.run([sys.executable, "-c", script], env=env,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
