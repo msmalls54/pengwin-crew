@@ -74,7 +74,20 @@ class EventbriteClient:
             raise ValueError("Public RSVP capacity is required")
         def utc(value):
             return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        summary = " ".join(part for part in (plan.description, plan.meeting_url) if part)[:140]
+        summary = plan.description.strip() or plan.name
+        if plan.meeting_url:
+            invitation = f"Join online: {plan.meeting_url}"
+            if len(invitation) > 140:
+                raise ValueError("Meeting URL is too long for the Eventbrite summary")
+            available = 140 - len(invitation) - 1
+            if available >= 15 and summary:
+                prefix = summary if len(summary) <= available else summary[:available].rsplit(" ", 1)[0]
+                prefix = prefix.rstrip(" ,.;:")
+                summary = f"{prefix} {invitation}" if prefix else invitation
+            else:
+                summary = invitation
+        else:
+            summary = summary[:140].rsplit(" ", 1)[0] if len(summary) > 140 else summary
         event = {
             "name": {"html": plan.name},
             "summary": summary or plan.name,

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from crew.eventbrite import checked_eventbrite_plan
+from crew.eventbrite import EventbriteClient, checked_eventbrite_plan
 from crew.luma import LumaPlan
 
 
@@ -57,6 +57,31 @@ def test_public_rsvp_requires_stated_capacity_and_no_unsent_named_guests():
         checked_eventbrite_plan(_plan(capacity=26), request)
     with pytest.raises(ValueError, match="does not email named guests"):
         checked_eventbrite_plan(_plan(guests=["guest@example.com"]), request + " Invite guest@example.com")
+
+
+def test_eventbrite_summary_preserves_complete_meeting_url(monkeypatch):
+    meeting_url = "https://meet.jit.si/PengwinSafeAgentsLive202610022d6b03e6e5"
+    plan = _plan(description="A free live demonstration of Pengwin's Slack-based agents executing code safely on Vultr.",
+                 meeting_url=meeting_url)
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"id": "12345", "status": "draft"}
+
+    def fake_request(method, url, **kwargs):
+        captured.update(kwargs["json"])
+        return Response()
+
+    monkeypatch.setattr("crew.eventbrite.httpx.request", fake_request)
+    assert EventbriteClient(token="test", organization_id="123").create_draft(plan) == "12345"
+    summary = captured["event"]["summary"]
+    assert len(summary) <= 140
+    assert meeting_url in summary
+    assert not summary.endswith("/PengwinSafeAgentsLive202610022")
 
 
 def test_eventbrite_publishing_waits_for_exact_slack_approval(tmp_path):
