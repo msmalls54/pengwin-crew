@@ -4,7 +4,8 @@ import sys
 
 from crew.project_planner import (
     EventProposal, InvitationProposal, ProjectPlan, SwagProposal,
-    checked_project_plan, is_multi_part_project_request, project_plan_summary,
+    checked_project_plan, generic_sourcing_proposal,
+    is_multi_part_project_request, project_plan_summary,
 )
 
 
@@ -14,6 +15,21 @@ def _run_isolated(script, tmp_path):
     result = subprocess.run([sys.executable, "-c", script], env=env,
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
+
+
+def test_sourcing_uses_only_affirmative_product_clauses():
+    assert generic_sourcing_proposal("Please don't buy 24 water bottles.") is None
+    assert generic_sourcing_proposal("I do not want to order 24 water bottles.") is None
+    mixed = generic_sourcing_proposal(
+        "Don't buy 24 water bottles; buy 2 tote bags instead."
+    )
+    assert mixed is not None
+    assert (mixed.product_phrase, mixed.quantity) == ("tote bags", 2)
+    assert generic_sourcing_proposal(
+        "Don't buy 24 water bottles; buy 2 coffee bags instead."
+    ) is None  # The affirmative item belongs to the fictional catalog.
+    positive = generic_sourcing_proposal("Don't forget to buy 2 tote bags for Berlin.")
+    assert positive is not None and positive.product_phrase == "tote bags"
 
 
 def test_project_plan_keeps_stated_details_and_removes_invented_ones():

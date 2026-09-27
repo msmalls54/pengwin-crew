@@ -78,24 +78,41 @@ class SourcingProposal(BaseModel):
 
 
 def generic_sourcing_proposal(text: str) -> SourcingProposal | None:
-    """Recognize a narrow quantity + product request without inventing a SKU."""
-    match = re.search(
-        r"\b(?:buy|order|purchase|get)\s+(?:me\s+)?(\d{1,4})\s+"
-        r"([a-z][a-z -]{1,60}?)(?=\s+(?:for|to|at|with|and|from)\b|[.!?]|$)",
-        text, re.I,
-    )
-    if not match:
-        return None
-    quantity = int(match.group(1))
-    product = " ".join(match.group(2).casefold().removesuffix(" please").split())
+    """Source only an affirmative, explicit quantity + non-catalog product."""
     demo_products = {
         "oat milk", "oat milk carton", "oat milk cartons", "coffee", "coffee bag",
         "coffee bags", "coffee beans", "hoodie", "hoodies", "welcome kit",
         "welcome kits",
     }
-    if not product or product in demo_products or not 1 <= quantity <= 1000:
-        return None
-    return SourcingProposal(product_phrase=product, quantity=quantity)
+    clauses = re.split(
+        r"[.!?;]|\bbut\b|"
+        r"\band\s+(?=(?:please\s+)?(?:buy|order|purchase|get)\b)|"
+        r",(?=\s*(?:(?:instead|please)\s+)?(?:buy|order|purchase|get)\b)",
+        text, flags=re.I,
+    )
+    negative_action = re.compile(
+        r"\b(?:do\s+not|don['’]?t|never|not\s+to)\s+"
+        r"(?:(?:please|ever|actually|yet)\s+)?"
+        r"(?:(?:want\s+(?:you\s+)?to|need\s+to)\s+)?"
+        r"(?:buy|order|purchase|get)\b"
+        r"|\b(?:do\s+not|don['’]?t|never)\s+(?:want|need)\b"
+        r"|\bno\s+(?:buy|order|purchase|get)\b",
+        re.I,
+    )
+    request = re.compile(
+        r"\b(?:buy|order|purchase|get)\s+(?:me\s+)?(\d{1,4})\s+"
+        r"([a-z][a-z -]{1,60}?)(?=\s+(?:for|to|at|with|and|from|instead)\b|$)",
+        re.I,
+    )
+    for clause in clauses:
+        if negative_action.search(clause):
+            continue
+        for match in request.finditer(clause):
+            quantity = int(match.group(1))
+            product = " ".join(match.group(2).casefold().removesuffix(" please").split())
+            if product and product not in demo_products and 1 <= quantity <= 1000:
+                return SourcingProposal(product_phrase=product, quantity=quantity)
+    return None
 
 
 def user_request_source(request_text: str, context: str = "") -> str:
