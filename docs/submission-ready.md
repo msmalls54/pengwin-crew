@@ -1,14 +1,14 @@
 # Challenge 1 submission receipt and fields
 
-Submitted September 27, 2026 at about 2:52 a.m. PDT (09:52 UTC) through the signed-in organizer form at https://cerebralvalley.ai/e/vultr-the-agent-arena/hackathon/submit . The form showed **“Project submitted successfully!”** and navigated to [Your Submission](https://cerebralvalley.ai/e/vultr-the-agent-arena/hackathon/projects), where **Pengwin Crew** and the GitHub, video, slides, live URL, Challenge 1 category, and other fields below were visible. The organizer page did not display an immutable submission ID. Its guide says submissions are due at **12:00 p.m. PDT September 27**.
+Submitted September 27, 2026 at about 2:52 a.m. PDT (09:52 UTC) through the signed-in organizer form at https://cerebralvalley.ai/e/vultr-the-agent-arena/hackathon/submit . The form showed **“Project submitted successfully!”**. At about 10:55 a.m. PDT, the existing entry was updated with the owner-recorded, narrated video and concise project story. The form showed **“Project updated successfully!”**, and [Your Submission](https://cerebralvalley.ai/e/vultr-the-agent-arena/hackathon/projects) displayed the new video, summary, GitHub, slides, live URL, and Challenge 1 category. No immutable submission ID was shown. The organizer guide says submissions are due at **12:00 p.m. PDT September 27**.
 
 | Field | Entry |
 | --- | --- |
 | Team name | Pengwin Crew |
-| One-line summary | Plan an event in Slack while four agents coordinate, remember decisions, and prove safe execution on Vultr. |
+| One-line summary | Four Slack agents plan events, remember decisions, and run sandboxed tasks on Vultr. |
 | Public GitHub | https://github.com/msmalls54/pengwin-crew |
 | Slides | https://github.com/msmalls54/pengwin-crew/blob/master/assets/deck/pengwin-agent-arena-submission.pdf |
-| One-minute video | https://104-156-229-63.sslip.io/static/pengwin-challenge1-demo.mp4 |
+| One-minute video | https://104-156-229-63.sslip.io/static/pengwin-challenge1-final.mp4 |
 | Live URL | https://104-156-229-63.sslip.io |
 | Hosting platform | Vultr Cloud Compute: control and isolated sandbox VMs. |
 | Problem statement | 1. Blast Radius Zero: Safe Agent Execution on Vultr |
@@ -17,7 +17,7 @@ Submitted September 27, 2026 at about 2:52 a.m. PDT (09:52 UTC) through the sign
 
 ## Description
 
-Pengwin is a Slack-first event crew with Concierge, Events, Buyer, and Treasurer. A test sent by Codex through Mike's signed-in Slack account asks for a Salesforce Park gathering, 24 water bottles, and invitation drafts. The crew proposes dates, the official venue permit inquiry route, an official Printful product-only estimate, and a budget review. In a separate bot-authored test, a worker restart and same-thread quantity change show durable project recall. Direct Buyer and Treasurer follow-ups in the signed-in-user test also recall the 24-bottle estimate without claiming payment; an Events follow-up checks the saved October 2 RSVP page through Eventbrite. No venue booking, Eventbrite publication for the new gathering, order, payment, or invitation send is claimed. The public read-only feed shows role steps and keeps estimates separate from actual charges. For Challenge 1, Vultr inference writes Python; a disposable, networkless container on a separate Vultr VM executes it, enforces a ten-second timeout, is removed, and allows the next run to succeed. A small policy/sandbox scaffold was committed 11 minutes before the 11:30 a.m. September 26 kickoff; the deployed integrations and this event flow were built after kickoff. Brave search is implemented but has no configured key in this demo.
+Pengwin is an event operations crew inside Slack. In the recorded live test, Mike asked Concierge to plan a Salesforce Park meetup for 30 founders, source 24 water bottles, draft invitations, and review the swag budget. Concierge saved one project and delegated the work. Events proposed October 27–29 and found the official park inquiry route. Buyer checked Printful and estimated $486–$561.84 for 24 bottles. Treasurer reviewed that estimate against the recorded $1,100 allocation and identified the delivered total needed for approval. Follow-up questions to each agent recalled the same saved project. The public page shows their work and shared memory. For Challenge 1, the separate `/sandbox` page shows Vultr-generated code running on an isolated, networkless VM with a ten-second limit, cleanup, and a subsequent successful run. A small sandbox scaffold predates kickoff; the deployed integrations and event workflow were built after kickoff.
 
 ## Problem and outcome
 
@@ -25,4 +25,4 @@ Event teams lose context across tools, and unconstrained agent execution can rea
 
 ## Private judge access
 
-The activity feed and video open anonymously. Running a new sandbox task requires the separate `WEB_DEMO_TOKEN`; it is not in Git, the video, or these submission fields. The signed-in submission form has no private credentials field, and no private digital organizer channel has been verified. Give the token to judges in person during the live demo, or through a private organizer channel only if one is verified later.
+The saved-project page and video open anonymously. The Challenge 1 execution proof is separately available at https://104-156-229-63.sslip.io/sandbox . Running a new sandbox task requires `WEB_DEMO_TOKEN`; it is not in Git, the video, or these submission fields. The signed-in form has no private credentials field and no private digital organizer channel has been verified. Give the token to judges in person during the live demo, or through a private organizer channel only if one is verified later.

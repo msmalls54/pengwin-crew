@@ -2,11 +2,11 @@
 
 ## A crew that works where your team already talks
 
-Pengwin lives in the private `#pengwin-ops` Slack channel. Ask Concierge to plan an event, source water bottles, and draft invitations in one message. Concierge gives Events, Buyer, and Treasurer their parts; each reports in the same thread. The crew remembers the project's verified work after a restart. The browser lab gives hackathon judges a readable activity feed and lets them run code in a disposable Vultr container.
+Pengwin lives in the private `#pengwin-ops` Slack channel. Ask Concierge to plan an event, source water bottles, and draft invitations in one message. Concierge gives Events, Buyer, and Treasurer their parts; each reports in the same thread. The crew remembers the project's verified work after a restart. The public page shows one saved project and the work each agent completed.
 
-**Live judge lab:** [https://104-156-229-63.sslip.io](https://104-156-229-63.sslip.io) shows the sanitized activity feed publicly; the runnable sandbox requires a demo token shared privately. [Run the demo](docs/demo-runbook.md) with Slack as the crew's workplace and the browser as execution proof.
+**Live demo:** [See the saved event plan and four-agent activity](https://104-156-229-63.sslip.io). The separate [Challenge 1 sandbox](https://104-156-229-63.sslip.io/sandbox) shows the containment receipt; a new run requires a demo token shared privately. [Run the demo](docs/demo-runbook.md) in Slack.
 
-**Submission:** [Watch the 59-second demo](https://104-156-229-63.sslip.io/static/pengwin-challenge1-demo.mp4) and [view the five-slide deck](assets/deck/pengwin-agent-arena-submission.pdf). The Slack request in the video is labelled as a bot-authored live worker test.
+**Submission:** [Watch the 49-second narrated demo](https://104-156-229-63.sslip.io/static/pengwin-challenge1-final.mp4) and [view the five-slide deck](assets/deck/pengwin-agent-arena-submission.pdf). The video uses the owner's real Slack request and follow-ups.
 
 **See the executed result:** [Vultr sandbox receipt](docs/sandbox-execution-receipt.md). A live model wrote Python for “Calculate 19 plus 23”; the remote container ran it and returned `42`. A separate infinite loop stopped at the ten-second limit, and no ephemeral containers remained. Pengwin is a fictional software and design firm with offices in San Francisco and Berlin; its stores, people, addresses, and transaction examples are demo data.
 
@@ -14,7 +14,7 @@ The control VM holds durable projects, scoped conversation turns, task and audit
 
 ## Plan an event in Slack
 
-Tell Concierge: **“Plan a Pengwin event at Salesforce Park in about a month, get 30 water bottles, and draft invites for local AI founders.”** Vultr inference proposes a typed plan, and deterministic checks retain only details stated by the requester. Events suggests exact date options, researches venue and reservation leads, and drafts the Eventbrite description and invitation copy. Buyer checks an official Printful water-bottle product range and, when the quantity is known, computes a product-only subtotal estimate. Treasurer records why the goods are needed and compares the estimate with the internal demo allocation. No park reservation, physical order, new Eventbrite page, or invitation is claimed from this planning request.
+Tell Concierge: **“Plan a Pengwin event at Salesforce Park in about a month, get 24 water bottles, and draft invites for local AI founders.”** Vultr inference proposes a typed plan, and deterministic checks retain only details stated by the requester. Events suggests exact date options, researches venue and reservation leads, and drafts the Eventbrite description and invitation copy. Buyer checks an official Printful water-bottle product range and, when the quantity is known, computes a product-only subtotal estimate. Treasurer records why the goods are needed and compares the estimate with the internal demo allocation. No park reservation, physical order, new Eventbrite page, or invitation is claimed from this planning request.
 
 If the time, capacity, bottle artwork, delivery destination, or audience is missing, the crew asks for it in Slack and keeps its work linked to the same project. A revised request in the same thread supersedes earlier checkout handoffs. The current Printful catalog range is research, not a landed quote: shipping, tax, variant, stock, and artwork still need a reviewed checkout. The personal DoorDash CLI is excluded from this business flow; see the [reuse audit](docs/orderly-doordash-reuse.md).
 

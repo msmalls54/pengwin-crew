@@ -1,5 +1,7 @@
 # Challenge 1 video provenance
 
+This page documents the earlier technical cut for audit history. The [submitted 49-second video](https://104-156-229-63.sslip.io/static/pengwin-challenge1-final.mp4) uses Mike's own recorded Slack request and follow-ups, natural narration, and captures of the deployed saved-project page. The signed-in organizer entry was updated to that video September 27 at about 10:55 a.m. PDT.
+
 The [59-second MP4](https://104-156-229-63.sslip.io/static/pengwin-challenge1-demo.mp4) is 1920×1080 H.264/AAC, with an identical [source artifact](../assets/demo/pengwin-challenge1-demo.mp4). It combines recorded clips from the deployed Slack workers and public judge page. It is edited for time; the twelve-second timeout segment plays at normal speed. Narration is in [demo-narration.txt](demo-narration.txt) and was rendered locally with Microsoft Mark. The source captures remain outside the public repository because they include a private Slack workspace.
 
 ## Evidence shown
