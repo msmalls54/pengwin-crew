@@ -317,7 +317,7 @@ def build_app() -> App:
         if claim.cached_reply:
             reply = claim.cached_reply
         elif memory.is_project_recall_request(text):
-            reply = memory.format_project_facts(project_facts)
+            reply = memory.format_concierge_project_facts(project_facts)
         else:
             from .dialogue import answer
             thread_token = memory.set_active_thread_root(thread_root_ts)

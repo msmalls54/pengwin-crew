@@ -451,18 +451,26 @@ with SessionLocal.begin() as session:
                         channel_id='C_DEMO', status='COMPLETE'))
 create_or_update_project(run_id=run_id, owner_user_id='U_OWNER', channel_id='C_DEMO',
     thread_root_ts='100.001', name='Salesforce Park gathering', safe_plan={
-        'event':{'title':'SF gathering','venue_name':'Salesforce Park'},
+        'event':{'title':'SF gathering','venue_name':'Salesforce Park',
+                 'date_phrase':'about a month from now',
+                 'time_phrase':'starting around 5 p.m. for 90 minutes','capacity':30},
         'swag':{'quantity':24}, 'invitations':{'audience_phrase':'local founders'}},
     status='ACTIVE')
 with SessionLocal.begin() as session:
     for role, kind, output in (
         ('Events','event_research',{'venue_status':'UNCONFIRMED',
-            'eventbrite_status':'NOT_CREATED','invitation_status':'DRAFT_ONLY'}),
+            'eventbrite_status':'NOT_CREATED','invitation_status':'DRAFT_ONLY',
+            'date_options':['2026-10-27','2026-10-28','2026-10-29'],
+            'invitation_draft':"You're invited to the Salesforce Park gathering.",
+            'official_reservation_route':{'operator':'Transbay Joint Powers Authority',
+                'url':'https://www.tjpa.org/permits-reservations','availability':'UNCHECKED'}}),
         ('Buyer','product_source',{'publisher_status':'ok',
             'source_url':'https://www.printful.com/custom-water-bottles',
             'currency':'USD','unit_min':20.25,'unit_max':23.41,
             'subtotal_min':486.00,'subtotal_max':561.84,'checkout_status':'NOT_READY'}),
         ('Treasurer','budget_review',{'review_status':'ESTIMATE_ONLY',
+            'product_subtotal_min':486.00,'product_subtotal_max':561.84,
+            'internal_demo_budget_room_cents':110000,'over_internal_budget':False,
             'payment_status':'NONE','reserved_cents':0}),
     ):
         session.add(AgentJob(id=str(uuid4()), run_id=run_id, role=role, kind=kind,
@@ -498,15 +506,19 @@ mention({'user':'U_OWNER','channel':'C_DEMO','ts':'100.002','thread_ts':'100.001
          'text':'<@Concierge> ' + request}, {'event_id':'guard-recap'}, say)
 reply = replies[-1]['text']
 assert '24 water bottles' in reply and '$486.00–$561.84' in reply
-assert 'Venue availability and booking are unconfirmed' in reply
-assert 'Invitations: draft only' in reply
-assert 'Checkout is not ready' in reply
-assert 'no funds reserved or payment action' in reply
+assert 'Oct 27, Oct 28, Oct 29' in reply
+assert 'starting around 5 p.m. for 90 minutes' in reply
+assert "Invitation draft: You're invited" in reply
+assert 'www.printful.com/custom-water-bottles' in reply
+assert '$1,100.00' in reply and 'fits within' in reply
+assert 'Next: choose one date' in reply
+assert reply.count('Status:') == 1
+assert 'Checkout is not ready' not in reply and 'no funds reserved' not in reply
 assert replies[-1]['thread_ts'] == '100.001'
 mention({'user':'U_OWNER','channel':'C_DEMO','ts':'100.003','thread_ts':'100.001',
          'text':'<@Concierge> What is the latest saved project in this thread?'},
         {'event_id':'guard-latest'}, say)
-assert 'Saved project: Salesforce Park gathering' in replies[-1]['text']
+assert 'Saved plan: Salesforce Park gathering' in replies[-1]['text']
 assert '$486.00–$561.84' in replies[-1]['text']
 assert replies[-1]['thread_ts'] == '100.001'
 with SessionLocal() as session:

@@ -611,6 +611,82 @@ def format_project_facts(facts: dict | None, *, for_model: bool = False) -> str:
     return (prefix + "\n".join(lines))[:1_500]
 
 
+def format_concierge_project_facts(facts: dict | None) -> str:
+    """Lead an owner-scoped Slack recap with saved work and one decision."""
+    if facts is None:
+        return "I don't see a saved project for you in this channel."
+    lines = [f"Saved plan: {facts['name']}."]
+    if facts.get("run_status") in {"QUEUED", "RUNNING"}:
+        lines.append("The latest revision is in progress; its estimates may change.")
+    event = facts.get("event") or {}
+    invites = facts.get("invitations") or {}
+    swag = facts.get("swag") or {}
+    treasury = facts.get("treasury") or {}
+    options = event.get("date_options") or []
+    if event:
+        venue = event.get("venue") or event.get("title")
+        detail = [venue]
+        if options:
+            labels = [f"{date.fromisoformat(value):%b} {date.fromisoformat(value).day}"
+                      for value in options]
+            detail.append("date options " + ", ".join(labels))
+        elif event.get("date"):
+            detail.append("timing " + event["date"])
+        if event.get("time"):
+            detail.append(event["time"])
+        if event.get("capacity"):
+            detail.append(f"{event['capacity']} guests")
+        lines.append("Events: " + "; ".join(detail) + ".")
+        if event.get("official_inquiry_url"):
+            lines.append("Venue inquiry: " + event["official_inquiry_url"] + ".")
+    if invites.get("draft"):
+        lines.append("Invitation draft: " + invites["draft"])
+    elif invites.get("status") == "DRAFT_ONLY":
+        lines.append("Events prepared invitation copy for review.")
+    if swag:
+        count = f"{swag['quantity']} water bottles" if swag.get("quantity") else "water bottles"
+        if (swag.get("publisher_status") == "ok" and swag.get("currency") == "USD"
+                and swag.get("subtotal_min") is not None and swag.get("subtotal_max") is not None):
+            lines.append(f"Buyer: sourced {count} from Printful; product-only estimate "
+                         f"${swag['subtotal_min']:.2f}–${swag['subtotal_max']:.2f} before shipping and tax.")
+            if swag.get("source_url"):
+                lines.append("Product source: " + swag["source_url"] + ".")
+        else:
+            lines.append(f"Buyer: researching a current product price for {count}.")
+    if treasury.get("review_status") == "ESTIMATE_ONLY":
+        room = treasury.get("budget_room_cents")
+        high = treasury.get("product_subtotal_max")
+        if room is not None and high is not None:
+            judgment = "exceeds" if treasury.get("over_budget") else "fits within"
+            lines.append(f"Treasurer: the product-only estimate {judgment} the "
+                         f"${room / 100:,.2f} available in the recorded swag allocation.")
+        else:
+            lines.append("Treasurer: recorded the product estimate for budget review.")
+    next_steps = []
+    if options:
+        next_steps.append("choose one date")
+    elif event and not event.get("date"):
+        next_steps.append("confirm a date")
+    if event and not event.get("time"):
+        next_steps.append("confirm the start time and duration")
+    if invites and event and not event.get("capacity"):
+        next_steps.append("set RSVP capacity")
+    if swag:
+        next_steps.append("send bottle artwork, variant, and delivery destination for an exact checkout total")
+    if next_steps:
+        lines.append("Next: " + "; ".join(next_steps) + ".")
+    boundaries = []
+    if event:
+        boundaries.extend(("venue booking", "RSVP publication"))
+    if swag:
+        boundaries.extend(("bottle order", "payment"))
+    if invites:
+        boundaries.append("invitation send")
+    if boundaries:
+        lines.append("Status: no " + ", ".join(boundaries) + " recorded for this plan.")
+    return "\n".join(lines)[:1_500]
+
+
 def is_project_role_detail_request(role: str, text: str) -> bool:
     """Route read-only questions about completed role work before generic chat."""
     value = " ".join(text.casefold().split())

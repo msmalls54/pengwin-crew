@@ -73,6 +73,11 @@ def index():
     return FileResponse(WEB / "index.html")
 
 
+@app.get("/sandbox")
+def sandbox_page():
+    return FileResponse(WEB / "sandbox.html")
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "planner_mode": settings.planner_mode,

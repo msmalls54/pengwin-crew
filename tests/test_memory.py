@@ -319,6 +319,7 @@ init_db()
 plan = {
     'name': 'SF launch',
     'event': {'title': 'SF launch', 'date_phrase': 'Oct 2',
+              'time_phrase': 'starting around 5 p.m. for 90 minutes',
               'venue_name': 'Salesforce Park', 'capacity': 50},
     'swag': {'quantity': 40, 'product': 'water_bottle'},
     'invitations': {'emails': ['private@example.com'], 'audience_phrase': 'the team'},
@@ -340,11 +341,12 @@ with SessionLocal.begin() as session:
         'event_research': {'venue_status':'UNCONFIRMED',
                            'eventbrite_status':'NOT_CREATED',
                            'invitation_status':'DRAFT_ONLY',
+                           'date_options':['2026-10-27','2026-10-28','2026-10-29'],
                            'official_reservation_route': {
                                'operator':'Transbay Joint Powers Authority',
                                'url':'https://www.tjpa.org/permits-reservations',
                                'availability':'UNCHECKED'},
-                           'invitation_draft':'Contact private@example.com'},
+                           'invitation_draft':"You're invited to SF launch at Salesforce Park."},
         'product_source': {'publisher_status':'ok', 'source_url':
                            'https://www.printful.com/custom-water-bottles',
                            'currency':'USD', 'quantity':40,
@@ -354,6 +356,8 @@ with SessionLocal.begin() as session:
                            'checkout_status':'NOT_READY'},
         'budget_review': {'review_status':'ESTIMATE_ONLY',
                           'product_subtotal_min':520, 'product_subtotal_max':640,
+                          'internal_demo_budget_room_cents':110000,
+                          'over_internal_budget':False,
                           'payment_status':'NONE', 'reserved_cents':0},
     }
     for kind, output in outputs.items():
@@ -363,7 +367,7 @@ with SessionLocal.begin() as session:
             input_json='{}', output_json=json.dumps(output), status='DONE'))
 ''', env)
     _run('''
-from crew.memory import (format_project_facts, latest_project_facts,
+from crew.memory import (format_concierge_project_facts, format_project_facts, latest_project_facts,
                          is_project_recall_request)
 facts = latest_project_facts(user_id='U_A', channel_id='C_DEMO',
                              thread_root_ts='100.001')
@@ -376,6 +380,17 @@ assert 'www.tjpa.org/permits-reservations' in reply
 assert 'Checkout is not ready' in reply and 'no funds reserved' in reply
 assert 'private@example.com' not in reply and 'Contact private' not in reply
 assert 'Other user project' not in reply
+concierge = format_concierge_project_facts(facts)
+assert concierge.startswith('Saved plan: SF launch.')
+assert 'Oct 27, Oct 28, Oct 29' in concierge
+assert 'starting around 5 p.m. for 90 minutes' in concierge
+assert "Invitation draft: You're invited to SF launch" in concierge
+assert '40 water bottles' in concierge and '$520.00–$640.00' in concierge
+assert 'www.printful.com/custom-water-bottles' in concierge
+assert '$1,100.00' in concierge and 'fits within' in concierge
+assert 'Next: choose one date' in concierge and concierge.count('Status:') == 1
+assert 'Checkout is not ready' not in concierge and 'no funds reserved' not in concierge
+assert 'private@example.com' not in concierge and 'Other user project' not in concierge
 assert latest_project_facts(user_id='U_A', channel_id='C_OTHER') is None
 assert latest_project_facts(user_id='U_B', channel_id='C_DEMO')['name'] == 'Other user project'
 assert is_project_recall_request('What have we planned?')

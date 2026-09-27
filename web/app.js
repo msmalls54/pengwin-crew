@@ -64,10 +64,11 @@ function render(state) {
 }
 
 function renderJudge(data) {
-  $('activity-connection').textContent=`● Read only · read at ${readableTime(data.as_of)}`;
+  const activityConnection=$('activity-connection');
+  if(activityConnection) activityConnection.textContent=`● Read only · read at ${readableTime(data.as_of)}`;
   const proof=data.historical_containment;
   const proofBox=$('judge-containment');
-  if(proof?.status==='contained'){
+  if(proofBox && proof?.status==='contained'){
     proofBox.classList.remove('empty-view');
     const lead=node('div','historical-proof-head');
     lead.append(node('strong','','Ten-second container limit enforced'),node('span','proof-status contained','Contained'));
@@ -78,10 +79,11 @@ function renderJudge(data) {
     inspect.addEventListener('click',()=>loadHistoricalCodeRun(proof.run_id));
     proofBox.replaceChildren(lead,recorded,node('p','judge-proof',proof.evidence),
       node('p','historical-source',`${proof.source} · run ${proof.run_id} · audit event ${proof.audit_event_id}`),inspect);
-  } else {
+  } else if(proofBox) {
     proofBox.classList.add('empty-view');
     proofBox.replaceChildren(node('p','','No verified containment receipt has been recorded yet.'));
   }
+  if(!activityConnection) return;
   const renderEvents=(target,events,emptyText)=>{
     target.classList.toggle('empty-view',events.length===0);
     target.replaceChildren(...(events.length ? events.map(event=>{
@@ -129,61 +131,9 @@ function renderJudge(data) {
     renderEvents($('judge-timeline'),featured.steps||[],'No completed work is saved for this project yet.');
   } else {
     memoryBox.classList.add('empty-view');
-    memoryBox.replaceChildren(node('p','','No public project snapshot is configured. The recorded example above remains a reviewed demonstration.'));
+    memoryBox.replaceChildren(node('p','','No public project snapshot is configured.'));
     renderEvents($('judge-timeline'),[],'No featured project steps are available.');
   }
-  renderEvents($('judge-all-activity'),data.activity||[],'No other activity is recorded.');
-
-  const runs=data.runs||[];
-  $('judge-runs').classList.toggle('empty-view',runs.length===0);
-  $('judge-runs').replaceChildren(...(runs.length ? runs.map(run=>{
-    const item=node('article','judge-run');
-    const head=node('div','judge-run-head');
-    head.append(node('strong','',run.flow),node('span',`proof-status ${run.status.toLowerCase()}`,statusWords[run.status]||'Recorded'));
-    item.append(head,node('time','',readableTime(run.created_at)));
-    const steps=node('div','judge-steps');
-    (run.steps||[]).forEach(step=>steps.append(node('span','judge-step',`${step.role}: ${step.task} · ${statusWords[step.status]||'Recorded'}`)));
-    item.append(steps);
-    return item;
-  }) : [node('p','','No recent tasks are recorded.')]));
-
-  const groups=[
-    ['Earlier mock-order proposals',data.spend?.proposed_mock_orders||[],'Quoted from fictional stores. This is not spending.'],
-    ['Simulated checkouts',data.spend?.simulated_checkouts||[],'Recorded locally; no real charge.'],
-    ['Sandbox transfers submitted',data.spend?.submitted_sandbox_transfers||[],'Submission is recorded; settlement is unconfirmed.']
-  ];
-  $('judge-spend-history').classList.remove('empty-view');
-  const spendItems=groups.map(([label,amounts,description])=>{
-    const item=node('div','spend-row');
-    const values=amounts.length ? amounts.map(entry=>`${money(entry.amount_cents,entry.currency)} (${entry.count})`).join(' · ') : 'None recorded';
-    item.append(node('strong','',label),node('span','spend-value',values),node('small','',description));
-    return item;
-  });
-  const estimate=data.spend?.water_bottle_product_estimate;
-  const estimateItem=node('div','spend-row estimate-row');
-  estimateItem.append(node('strong','','Sourced water-bottle range'));
-  if(estimate){
-    estimateItem.append(node('span','spend-value',`${money(estimate.unit_min_cents,'USD')}–${money(estimate.unit_max_cents,'USD')} each`));
-    if(estimate.quantity!==null){
-      estimateItem.append(node('small','',`${estimate.quantity} bottles · estimated product subtotal ${money(estimate.subtotal_min_cents,'USD')}–${money(estimate.subtotal_max_cents,'USD')}`));
-    }
-    estimateItem.append(node('small','',`Official catalog range checked ${readableTime(estimate.checked_at)}. Shipping, tax, design, stock, and final checkout total are unverified.`));
-    if(estimate.source_url==='https://www.printful.com/custom-water-bottles'){
-      const link=node('a','source-link','View Printful catalog source ↗');
-      link.href=estimate.source_url; link.target='_blank'; link.rel='noopener noreferrer';
-      estimateItem.append(link);
-    }
-  } else {
-    estimateItem.append(node('span','spend-value','No verified range recorded'),
-      node('small','','A search result alone is not a product price or checkout quote.'));
-  }
-  if(!featured) spendItems.unshift(estimateItem);
-  const realItem=node('div','spend-row real-spend');
-  realItem.append(node('strong','','Real settled spend'),node('span','spend-value','Not verified here'),
-    node('small','','Pengwin has no production settlement ledger. These figures do not represent a bank balance.'));
-  spendItems.push(realItem);
-  $('judge-spend-history').replaceChildren(...spendItems);
-
   const decision=$('judge-spend');
   decision.classList.toggle('empty-view',!featured?.buyer);
   const savedBuyer=featured?.buyer;
@@ -192,17 +142,12 @@ function renderJudge(data) {
     const amount=node('div','budget-decision-amount',`${money(savedBuyer.subtotal_min_cents,'USD')}–${money(savedBuyer.subtotal_max_cents,'USD')}`);
     const label=node('p','budget-decision-label',`Product estimate for ${savedBuyer.quantity} bottles, checked ${readableTime(savedBuyer.checked_at)}.`);
     const next=node('p','budget-decision-next','Next: get the exact variant, artwork, shipping, tax, and landed checkout total for approval.');
-    const status=node('p','budget-decision-status',`Treasurer: ${featured.treasury?.review_status==='estimate_only'?'estimate reviewed':'review pending'} · checkout ${savedBuyer.checkout_status==='not_ready'?'not ready':'status unknown'}.`);
+    const status=node('p','budget-decision-status',`Treasurer: ${featured.treasury?.review_status==='estimate_only'?'estimate reviewed':'review pending'} · ${savedBuyer.checkout_status==='not_ready'?'exact delivered quote needed for approval':'checkout status needs review'}.`);
     decision.replaceChildren(amount,label,next,status);
   } else {
     decision.replaceChildren(node('p','','A project-specific estimate is not available yet.'));
   }
 
-  const usage=data.model_usage||{};
-  $('judge-model').classList.remove('empty-view');
-  $('judge-model').replaceChildren(node('div','model-count',`${usage.attempted_calls||0} / ${usage.call_limit||0}`),
-    node('p','',`Attempted ${usage.model||'model'} calls against the configured limit. This count includes requests that later failed.`),
-    node('p','model-cost','Billed token usage and model cost are not recorded by this app.'));
 }
 
 async function refreshJudge() {
@@ -210,7 +155,10 @@ async function refreshJudge() {
     const response=await fetch('/api/public-activity');
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     renderJudge(await response.json());
-  } catch(error) { $('activity-connection').textContent=`Activity unavailable · ${error.message}`; }
+  } catch(error) {
+    const status=$('activity-connection')||$('judge-containment');
+    if(status) status.textContent=`Activity unavailable · ${error.message}`;
+  }
 }
 
 async function refresh() {
@@ -315,7 +263,7 @@ async function connect() {
     $('mode').textContent=accessRole==='demo'?'Sandbox demo connected':'Operator connected';
     $('controls-title').textContent=accessRole==='demo'?'Interactive test unlocked':'Operator controls unlocked';
     $('controls-desc').textContent=accessRole==='demo'
-      ? 'Run a new code task or inspect the saved timeout trace. The recorded event workflow above remains read only.'
+      ? 'Run a new code task or inspect the saved timeout trace. The Slack agent activity record remains read only.'
       : 'Each flow leaves an audit trail. The hoodie page contains a malicious quantity instruction; compare the Buyer’s proposal with the payment decision.';
     $('feedback').textContent='Connected.';
     $('code-status').textContent='Describe a calculation or small data task to run in the sandbox.';
@@ -328,11 +276,13 @@ document.querySelectorAll('[data-code-goal]').forEach(button=>button.addEventLis
   $('code-goal').value=button.dataset.codeGoal;
   $('code-goal').focus();
 }));
-$('connect').addEventListener('click',connect);
-$('run-code').addEventListener('click',runCode);
-$('freeze').addEventListener('click',()=>action('/api/freeze',{frozen:!latestState?.freeze}));
-$('reset').addEventListener('click',()=>action('/api/reset'));
-setInterval(refresh,5000);
+if($('connect')) {
+  $('connect').addEventListener('click',connect);
+  $('run-code').addEventListener('click',runCode);
+  $('freeze').addEventListener('click',()=>action('/api/freeze',{frozen:!latestState?.freeze}));
+  $('reset').addEventListener('click',()=>action('/api/reset'));
+  setInterval(refresh,5000);
+  setInterval(pollCodeRun,2000);
+}
 setInterval(refreshJudge,15000);
-setInterval(pollCodeRun,2000);
 refreshJudge();

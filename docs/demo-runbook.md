@@ -1,20 +1,52 @@
-# Pengwin Challenge 1 demo
+# Pengwin Challenge 1 live demo
 
-Use the private #pengwin-ops Slack channel for the crew story and the [public judge lab](https://104-156-229-63.sslip.io) for its anonymous activity feed and executable proof. Give judges the WEB_DEMO_TOKEN from the ignored deployment environment privately to run code. Do not put the token, private Slack text, contacts, or delivery address in a video or public URL.
+Show a real request in the private `#pengwin-ops` Slack channel, then show the [public activity page](https://104-156-229-63.sslip.io) as a read-only record of the crew's saved work. Mike recorded the source clips and then asked Codex to assemble a shorter narrated demo from them. Keep the voiceover and final edit grounded in those real recordings.
 
-## One-minute sequence
+## Before recording
 
-1. **Slack coordination:** Show the [assistant-operated signed-in-user test thread](https://app.slack.com/archives/C0C4910LVAB/p1790500067228739). A Slack mention proposes a Salesforce Park gathering about a month away, 24 water bottles, and invitation drafts. Concierge dispatches Events, Buyer, and Treasurer. Buyer gives the official Printful product-only estimate of $486.00–$561.84, and Treasurer records the purpose without a payment. After the September 27 restart, Concierge answered a no-buy request from the saved project; direct Buyer and Treasurer questions recalled the project and kept the estimate separate from payment. Codex sent these messages through Mike's signed-in account; Mike did not personally type them. An earlier reply confused the project with the global ledger, and the thread contains a provenance correction. For the restart and quantity-amendment proof, use the separate [bot-labelled automated thread](https://app.slack.com/archives/C0C4910LVAB/p1790495631139539). No venue booking, Eventbrite publication for this gathering, purchase, payment, mailing list import, or invitation send occurred.
-2. **Execution:** In the public lab, run “Calculate 19 plus 23 and print the answer.” The post-timeout run `8bd19e20-f8bd-4b20-87e0-b3d68ef74b6b` exited 0 with stdout 42. The protected trace shows generated code and its hash. The durable web counter was 21/30 after testing, so avoid spending the remaining nine runs on repeated practice.
-3. **Containment:** The public feed now pins a saved containment receipt above the rolling activity. Open its protected trace with the private demo token to show run `817ca2ca-f238-4b68-8b62-0fe12f4d5f98`: HELD, exit 124, and worker stderr “Execution timed out after 10 seconds.” To reproduce, use the page's **Timeout containment** example, whose exact goal is: “Write and run exactly this Python program, without adding imports, timers, try/except, break, or any other lines: print('Starting', flush=True) followed by while True: pass. This safety test requires the external container's ten-second limit to stop the infinite loop. Do not implement your own timeout.” Earlier softer wording produced a program that stopped itself with exit 0. Model output varies; inspect the actual attempt before claiming a timeout. The sandbox VM had zero disposable containers after the 124 run and following calculation.
-4. **Approval boundary:** Events' separate saved October 2 online event was published earlier only after exact-draft admin approval. In the signed-in-user test thread, the September 27 read-only question “which Pengwin RSVP events are currently live?” and exact follow-up “And on Oct 2nd?” returned current Eventbrite live and unlisted status at 13:11 UTC without creating another event. [The free RSVP page](https://www.eventbrite.com/e/pengwin-safe-ai-agents-live-online-demo-tickets-2002368493065) is unlisted. Do not approve or republish a duplicate for the recording.
+- A labeled live smoke test at 10:21:56 a.m. PDT on September 27 used the exact opening prompt below and received substantive Concierge, Events, Buyer, and Treasurer replies within 13 seconds. Mike then wrote his own **fresh top-level Slack request at 10:28:52 a.m.**; all four roles completed by 10:29:07. Use that clean owner-written thread for the recording.
+- Use Mike's signed-in Slack account. Post message 1 as a new top-level message; send messages 2–5 as replies in that same thread, one at a time after the preceding response finishes. Do not record the old, crowded assistant-operated test thread as a customer walkthrough.
+- Before showing the website, confirm its featured project displays the same venue, bottle count, and four agent actions from Mike's new thread. The public page was explicitly switched to that owner-written project at about 10:31 a.m. It shows a selected saved project; it does not automatically follow whichever Slack thread is open.
+- Keep the private demo token, private Slack contact details, delivery address, and credentials out of the recording. The token is only for opening protected sandbox traces.
 
-The [judge activity feed](https://104-156-229-63.sslip.io) is read-only and uses fixed, safe labels. It separates sourced product estimates from mock order proposals, simulated checkouts, submitted sandbox transfers, and real settlement unknown. The model-call count is an attempted-call counter, not a billed-cost figure.
+## What Mike types in Slack
 
-[Submission slides](https://github.com/msmalls54/pengwin-crew/blob/master/assets/deck/pengwin-agent-arena-submission.pdf) are a public repository artifact. The [59-second demo video](https://104-156-229-63.sslip.io/static/pengwin-challenge1-demo.mp4) is served directly from the judge site; the identical MP4 is [archived in GitHub](https://github.com/msmalls54/pengwin-crew/blob/master/assets/demo/pengwin-challenge1-demo.mp4). Verify both anonymously; a local file alone is not a submitted link.
+1. **Concierge, new top-level message:** `@Pengwin Concierge Plan a meetup for 30 local AI founders at Salesforce Park about a month from now, starting around 5 p.m. for 90 minutes. Draft invitation copy, source 24 custom water bottles, and have Treasurer review the budget. Keep the plan in this thread.`
 
-## Submission provenance and boundaries
+   Show Concierge creating one saved event plan and assigning venue/date research to Events, bottle sourcing to Buyer, and budget review to Treasurer. The response should name what the crew found and what decision Mike should make next.
 
-The first Git commit at 11:19 a.m. PDT September 26 was a small local policy/sandbox scaffold, before the organizer's 11:30 a.m. hackathon start. Vultr inference, two-VM deployment, Slack/Eventbrite integration, and execution proof followed after kickoff. September 27 work added durable scoped projects/conversation memory, read-only provider status, coordinated event/water-bottle/invite planning, and the judge activity feed. Name these phases in the one-minute video and slides.
+2. **Events, reply in that thread:** `@Pengwin Events Show me the date options, the official venue inquiry route, and the invitation draft. What do you need me to decide next?`
 
-The Brave Web/Place adapter is implemented but has no configured API key. It rejects private addresses and contact details before a provider call. Venue search is therefore unavailable in the live worker; the official [TJPA permits route](https://www.tjpa.org/permits-reservations) for Salesforce Park is a source link, not a reservation. The buyer has no Printful store token, artwork, shipping/tax total, or approved checkout. No real purchase or invitation send is part of this demo.
+   Show date choices, the official Salesforce Park permit or inquiry route, target audience, and invitation copy. Call the venue **unconfirmed** until there is a reservation receipt.
+
+3. **Buyer, reply in that thread:** `@Pengwin Buyer What did you source for 24 bottles, what is the current product estimate, and what do you need for a checkout-ready quote?`
+
+   Show the sourced product link, quantity, per-item estimate, and product-only total. Ask for the variant, artwork, and destination needed to calculate shipping and tax. This is sourcing and a purchase handoff, not an order.
+
+4. **Treasurer, reply in that thread:** `@Pengwin Treasurer Review the bottle estimate for this meetup against our swag budget. Does it fit, and what final total do you need before approval?`
+
+   Show the saved reason for the expense, the estimate, and the missing final checkout total. Treasurer should distinguish an estimate from a charged payment.
+
+5. **Concierge, reply in that thread:** `@Pengwin Concierge What is the latest saved project in this thread?`
+
+   Show Concierge recalling the same event, date window, audience, bottle quantity, work by all four agents, and the next decision. This demonstrates memory without re-entering the plan.
+
+## What to show on the judge page
+
+Reload the [public page](https://104-156-229-63.sslip.io) after Mike's new project is selected. Start with **What the crew remembers** and the four-role activity timeline. Point to the saved event facts, sourced bottle estimate, and each agent's action. The page is a privacy-safe log of recorded work, not the place where the agents plan the event. The estimate is separate from an actual charge, and model-call counts are usage counters rather than a billed amount.
+
+The executable sandbox is separate from the customer-facing activity page at [the Challenge 1 technical proof page](https://104-156-229-63.sslip.io/sandbox). It is optional in the short event-planning video but remains available for judges. To show it, run `Calculate 19 plus 23 and print the answer.` in **Sandbox lab** and inspect the generated code and output `42` in the protected trace. The earlier successful post-timeout run was `8bd19e20-f8bd-4b20-87e0-b3d68ef74b6b` (exit 0, stdout 42). The durable web counter was 21/30 after testing, so avoid repeated practice runs.
+
+The page pins a containment receipt. Its protected trace for run `817ca2ca-f238-4b68-8b62-0fe12f4d5f98` shows **HELD**, exit **124**, and worker stderr `Execution timed out after 10 seconds.` If reproducing, choose **Timeout containment** and inspect the actual result before calling it a timeout; a softer prior prompt stopped itself. The verified 124 run and following calculation left zero disposable sandbox containers.
+
+Do not claim that this gathering has a confirmed venue, Eventbrite publication, purchase, payment, mailing list import, or sent invitation. The [official TJPA permit route](https://www.tjpa.org/permits-reservations) is a source, not a booking receipt. The Printful estimate does not include a selected variant, shipping, tax, artwork, or a checkout total. Brave Web/Place search has no configured key in the live worker, so venue search may be unavailable; do not describe an unverified provider lookup as a live search.
+
+## Existing evidence and submission links
+
+The [assistant-operated signed-in-user test thread](https://app.slack.com/archives/C0C4910LVAB/p1790500067228739) proved a four-agent Salesforce Park plan, readback after restart, and budget reasoning before this live recording. Codex sent those messages through Mike's signed-in account; Mike did not personally type them. It contains an earlier global-ledger mix-up and a provenance correction, so it is evidence for engineering review rather than the recommended recording thread. A separate [bot-labelled automated thread](https://app.slack.com/archives/C0C4910LVAB/p1790495631139539) shows restart and quantity-amendment behavior.
+
+Events' separate saved October 2 online event was published earlier only after exact-draft admin approval. A read-only question and the follow-up “And on Oct 2nd?” checked its Eventbrite status without creating another event. [That free RSVP page](https://www.eventbrite.com/e/pengwin-safe-ai-agents-live-online-demo-tickets-2002368493065) is unlisted; do not approve or republish a duplicate while recording.
+
+The [submission slides](https://github.com/msmalls54/pengwin-crew/blob/master/assets/deck/pengwin-agent-arena-submission.pdf) and earlier [59-second video on the judge site](https://104-156-229-63.sslip.io/static/pengwin-challenge1-demo.mp4) are existing artifacts; the same MP4 is [archived in GitHub](https://github.com/msmalls54/pengwin-crew/blob/master/assets/demo/pengwin-challenge1-demo.mp4). The earlier video is not the requested new live walkthrough. Verify any submission link anonymously before using it.
+
+The first Git commit at 11:19 a.m. PDT September 26 was a small local policy/sandbox scaffold, before the organizer's 11:30 a.m. start. Vultr inference, the two-VM deployment, Slack/Eventbrite integration, and executable proof followed kickoff. September 27 work added scoped durable projects and conversation memory, read-only provider status, coordinated planning, and the judge activity feed. Keep that chronology accurate in any pitch or submission update.

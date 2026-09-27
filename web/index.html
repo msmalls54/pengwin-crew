@@ -3,89 +3,36 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Pengwin Crew plans events in Slack. See a recorded four-agent event workflow and inspect its Challenge 1 sandbox execution proof.">
-  <title>Pengwin Crew · Event planning in Slack</title>
+  <meta name="description" content="Pengwin Crew plans events in Slack. See the saved project facts and each agent's recorded work.">
+  <title>Pengwin Crew · Recorded work</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/app.js" defer></script>
 </head>
 <body class="demo-only">
   <div class="shell">
     <header class="site-header">
-      <a class="brand" href="#top" aria-label="Pengwin Crew, back to top"><span class="brand-mark" aria-hidden="true">P</span><span><strong>Pengwin Crew</strong><small>Event operations in Slack</small></span></a>
-      <span class="page-label">Challenge 1 · Judge proof</span>
+      <a class="brand" href="/" aria-label="Pengwin Crew, home"><span class="brand-mark" aria-hidden="true">P</span><span><strong>Pengwin Crew</strong><small>Event operations in Slack</small></span></a>
+      <span class="page-label">Recorded agent work</span>
     </header>
     <main id="top">
-      <section class="hero" aria-labelledby="hero-title">
+      <section class="hero hero-simple" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <span class="eyebrow">FROM REQUEST TO REVIEWABLE PLAN</span>
-          <h1 id="hero-title">Plan an event from one Slack message.</h1>
-          <p class="hero-lead">Concierge coordinates Events, Buyer, and Treasurer in Slack. The crew researches the venue, sources supplies, drafts invitations, and gives you a budget to review.</p>
-          <div class="hero-actions"><a class="primary-link" href="#recorded-example">See what each agent did <span aria-hidden="true">↗</span></a><a class="text-link" href="#judge-proof">Inspect recorded work <span aria-hidden="true">↓</span></a></div>
-          <p class="hero-context"><strong>Why this page exists:</strong> It gives judges public, sanitized evidence of work that happens in Slack. A private token unlocks the separate code execution demonstration below.</p>
+          <span class="eyebrow">FROM ONE SLACK REQUEST</span>
+          <h1 id="hero-title">The crew does the work in Slack. This is the record.</h1>
+          <p class="hero-lead">Concierge coordinates Events, Buyer, and Treasurer. Their saved event plan, completed work, and budget review appear below as the project changes.</p>
+          <div class="hero-actions"><a class="primary-link" href="#judge-proof">See the saved project <span aria-hidden="true">↓</span></a></div>
         </div>
-        <aside class="scenario-card" aria-label="Recorded event example summary">
-          <div class="scenario-top"><span class="scenario-icon" aria-hidden="true">#</span><span>Recorded example</span><span class="scenario-type">Slack workflow</span></div>
-          <p class="scenario-request">A late-October event at Salesforce Park, with invitations and 24 water bottles.</p>
-          <div class="scenario-divider"></div>
-          <div class="scenario-outcome"><span class="scenario-dot" aria-hidden="true"></span><div><strong>Four agents completed their parts</strong><span>Venue research, invitation copy, bottle sourcing, and budget review.</span></div></div>
-          <p class="scenario-footnote">Next: choose a date, define the guest list, and review the delivered bottle total.</p>
-        </aside>
-      </section>
-
-      <section class="recorded-example" id="recorded-example" aria-labelledby="recorded-title">
-        <div class="section-heading"><div><span class="eyebrow">ONE REQUEST · FOUR ROLES</span><h2 id="recorded-title">What each agent actually did</h2><p>These are checked outputs from the saved event workflow. Each role hands its result back to the shared plan.</p></div><span class="section-aside">Recorded example · Sep 27</span></div>
-        <div class="role-grid">
-          <article class="role-card concierge"><div class="role-top"><span class="role-number">01</span><span class="role-status">Coordinated</span></div><h3>Concierge</h3><p>Created one plan, assigned Events, Buyer, and Treasurer, and recalled the updated bottle quantity after a restart.</p><div class="role-result"><span>Output</span><strong>One durable event handoff</strong></div></article>
-          <article class="role-card events"><div class="role-top"><span class="role-number">02</span><span class="role-status">Proposal</span></div><h3>Events</h3><p>Proposed Oct 27–29 date options, an <a href="https://www.tjpa.org/permits-reservations" target="_blank" rel="noopener noreferrer">official Salesforce Park inquiry route</a>, an RSVP description, and invitation copy.</p><div class="role-result"><span>Still open</span><strong>Availability and guest list</strong></div></article>
-          <article class="role-card buyer"><div class="role-top"><span class="role-number">03</span><span class="role-status">Sourced estimate</span></div><h3>Buyer</h3><p>Checked the <a href="https://www.printful.com/custom-water-bottles" target="_blank" rel="noopener noreferrer">Printful catalog</a> for 24 bottles at $20.25–$23.41 each. The product-only estimate is $486.00–$561.84.</p><div class="role-result"><span>Still open</span><strong>Variant, shipping, tax, checkout</strong></div></article>
-          <article class="role-card treasurer"><div class="role-top"><span class="role-number">04</span><span class="role-status">Budget reviewed</span></div><h3>Treasurer</h3><p>Recorded why the 24 bottles are needed, checked the $486.00–$561.84 product estimate against the swag allocation, and identified the final total needed for approval.</p><div class="role-result"><span>Next</span><strong>Exact checkout total</strong></div></article>
-        </div>
-        <p class="flow-boundary"><strong>Next decisions:</strong> Choose the event date and audience, then review the exact bottle variant and delivered total before checkout.</p>
       </section>
       <section class="judge-board" id="judge-proof" aria-label="Saved project and agent work">
-        <div class="judge-heading"><div><span class="eyebrow">SAVED PROJECT · READ ONLY</span><h2>What the crew remembers</h2><p>This is a public, privacy-safe view of one recorded event project. It shows saved facts and completed agent work; conversations and contact details stay in Slack.</p></div><span id="activity-connection" class="activity-connection">Loading saved work</span></div>
+        <div class="judge-heading"><div><span class="eyebrow">SAVED PROJECT · READ ONLY</span><h2>What the crew remembers</h2><p>This public record shows the project's saved facts and each agent's completed work. The private conversation and contact details remain in Slack.</p></div><span id="activity-connection" class="activity-connection">Loading saved work</span></div>
         <div id="project-memory" class="project-memory empty-view">Loading the saved event project.</div>
         <div class="judge-grid">
-          <section class="card judge-activity"><div class="card-head"><h3>What each agent recorded</h3><span>From this project</span></div><div id="judge-timeline" class="judge-timeline empty-view">Loading project steps.</div></section>
-          <div class="judge-stack">
-            <section class="card"><h3>Budget decision</h3><div id="judge-spend" class="judge-spend empty-view">Loading the event estimate.</div></section>
-          </div>
-        </div>
-        <details class="technical-archive"><summary>Other recorded activity and system usage</summary><p>Older tests and separate projects are shown here for audit context. They are not part of the event plan above.</p><div class="archive-grid"><section class="card"><h3>Recent system activity</h3><div id="judge-all-activity" class="judge-timeline empty-view">Loading activity.</div></section><div class="judge-stack"><section class="card"><h3>Latest task states</h3><div id="judge-runs" class="judge-runs empty-view">Loading task status.</div></section><section class="card"><h3>Other estimates and transfers</h3><div id="judge-spend-history" class="judge-spend empty-view">Loading totals.</div></section><section class="card"><h3>Vultr model usage</h3><div id="judge-model" class="judge-model empty-view">Loading usage count.</div></section></div></div></details>
-      </section>
-      <section class="sandbox-section" id="sandbox" aria-labelledby="sandbox-title">
-        <div class="section-heading"><div><span class="eyebrow">CHALLENGE 1 · SAFE EXECUTION</span><h2 id="sandbox-title">Prove the crew can run and contain code</h2><p>This separate judge test shows Vultr-generated Python running in a disposable container. You can inspect the code, output, and ten-second timeout result. The code container has no network access or office credentials.</p></div><span class="section-aside">Protected interactive demo</span></div>
-        <section class="card historical-containment" aria-label="Historical sandbox containment proof"><div class="card-head"><h3>Saved timeout proof</h3><span>Recorded result</span></div><div id="judge-containment" class="empty-view">Loading recorded containment proof.</div></section>
-        <div class="sandbox-grid">
-          <section class="controls card" aria-labelledby="controls-title">
-            <div><h3 id="controls-title">Unlock the interactive test</h3><p id="controls-desc">The public proof above needs no token. Enter a private demo token to run a new calculation or inspect the saved trace.</p></div>
-            <div class="auth"><label for="token">Demo or operator token</label><input id="token" type="password" autocomplete="off" placeholder="Private access token"><button id="connect" class="secondary">Connect</button></div>
-            <div class="actions"><button data-flow="berlin-pantry">Berlin pantry</button><button data-flow="welcome-kit">New hire kit + lunch</button><button data-flow="hoodie-attack" class="attack">Company hoodies + attack</button><button id="freeze" class="secondary">Freeze payments</button><button id="reset" class="secondary">Reset demo</button></div>
-            <p id="feedback" role="status" aria-live="polite"></p>
-            <div id="mode" class="mode">Demo access required</div>
-          </section>
-          <section class="card lab" aria-labelledby="lab-title">
-            <div><h3 id="lab-title">Run a plain-English code task</h3><p>Start with a calculation. The timeout example tests the ten-second container limit; inspect the saved result first if you only need the proof.</p></div>
-            <label for="code-goal">Task for the code sandbox</label>
-            <textarea id="code-goal" maxlength="1000" rows="3" placeholder="Calculate 19 plus 23 and show the result."></textarea>
-            <div class="lab-examples" aria-label="Example goals"><span>Examples</span><button type="button" data-code-goal="Calculate 19 plus 23 and print the answer.">Calculation</button><button type="button" data-code-goal="Write and run exactly this Python program, without adding imports, timers, try/except, break, or any other lines: print('Starting', flush=True) followed by while True: pass. This safety test requires the external container's ten-second limit to stop the infinite loop. Do not implement your own timeout.">Timeout containment</button></div>
-            <button id="run-code">Run in sandbox</button>
-            <p id="code-status" role="status" aria-live="polite">Enter a demo token to run a task.</p>
-            <div id="code-attempts"></div>
-          </section>
-        </div>
-      </section>
-      <section class="grid operator-grid" aria-label="Operator controls">
-        <div class="card"><div class="card-head"><h2>Live work</h2><span id="connection">○ Locked</span></div><div id="timeline" class="timeline"></div></div>
-        <div class="stack">
-          <div class="card"><h2>Budgets</h2><div id="budgets"></div></div>
-          <div class="card"><h2>Agent permissions</h2><div id="permissions"></div></div>
-          <div class="card"><h2>Payment receipts</h2><div id="payments"></div></div>
+          <section class="card judge-activity"><div class="card-head"><h3>Agent activity</h3><span>From this project</span></div><div id="judge-timeline" class="judge-timeline empty-view">Loading project steps.</div></section>
+          <div class="judge-stack"><section class="card"><h3>Budget review</h3><div id="judge-spend" class="judge-spend empty-view">Loading the event estimate.</div></section></div>
         </div>
       </section>
     </main>
-    <dialog id="receipt"><form method="dialog"><button class="close" aria-label="Close">×</button></form><div id="receipt-body"></div></dialog>
-    <footer>Pengwin Crew · Event operations in Slack · Challenge 1 execution proof</footer>
+    <footer>Pengwin Crew · Event operations in Slack</footer>
   </div>
 </body>
 </html>

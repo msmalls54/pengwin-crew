@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Pengwin Crew's separate Challenge 1 sandbox: inspect a saved containment trace or run generated code in a disposable Vultr container.">
+  <title>Pengwin Crew · Challenge 1 sandbox</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body class="demo-only">
+  <div class="shell">
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Pengwin Crew, activity record"><span class="brand-mark" aria-hidden="true">P</span><span><strong>Pengwin Crew</strong><small>Event operations in Slack</small></span></a>
+      <span class="page-label">Challenge 1 · Sandbox proof</span>
+    </header>
+    <main id="top">
+      <section class="hero hero-simple" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <span class="eyebrow">SEPARATE TECHNICAL PROOF</span>
+          <h1 id="hero-title">Run code. Inspect the result and containment.</h1>
+          <p class="hero-lead">This page demonstrates Vultr-generated Python in a disposable container. It is separate from the <a href="/">Slack agent activity record</a>.</p>
+        </div>
+      </section>
+      <section class="sandbox-section" id="sandbox" aria-labelledby="sandbox-title">
+        <div class="section-heading"><div><span class="eyebrow">CHALLENGE 1 · SAFE EXECUTION</span><h2 id="sandbox-title">Code execution and timeout proof</h2><p>Inspect the recorded ten-second timeout below. A private demo token unlocks a new calculation or the full saved trace. The code container has no network access or office credentials.</p></div><span class="section-aside">Protected interactive demo</span></div>
+        <section class="card historical-containment" aria-label="Historical sandbox containment proof"><div class="card-head"><h3>Saved timeout proof</h3><span>Recorded result</span></div><div id="judge-containment" class="empty-view">Loading recorded containment proof.</div></section>
+        <div class="sandbox-grid">
+          <section class="controls card" aria-labelledby="controls-title">
+            <div><h3 id="controls-title">Unlock the interactive test</h3><p id="controls-desc">The public proof above needs no token. Enter a private demo token to run a new calculation or inspect the saved trace.</p></div>
+            <div class="auth"><label for="token">Demo or operator token</label><input id="token" type="password" autocomplete="off" placeholder="Private access token"><button id="connect" class="secondary">Connect</button></div>
+            <div class="actions"><button data-flow="berlin-pantry">Berlin pantry</button><button data-flow="welcome-kit">New hire kit + lunch</button><button data-flow="hoodie-attack" class="attack">Company hoodies + attack</button><button id="freeze" class="secondary">Freeze payments</button><button id="reset" class="secondary">Reset demo</button></div>
+            <p id="feedback" role="status" aria-live="polite"></p>
+            <div id="mode" class="mode">Demo access required</div>
+          </section>
+          <section class="card lab" aria-labelledby="lab-title">
+            <div><h3 id="lab-title">Run a plain-English code task</h3><p>Start with a calculation. The timeout example tests the external ten-second container limit.</p></div>
+            <label for="code-goal">Task for the code sandbox</label>
+            <textarea id="code-goal" maxlength="1000" rows="3" placeholder="Calculate 19 plus 23 and show the result."></textarea>
+            <div class="lab-examples" aria-label="Example goals"><span>Examples</span><button type="button" data-code-goal="Calculate 19 plus 23 and print the answer.">Calculation</button><button type="button" data-code-goal="Write and run exactly this Python program, without adding imports, timers, try/except, break, or any other lines: print('Starting', flush=True) followed by while True: pass. This safety test requires the external container's ten-second limit to stop the infinite loop. Do not implement your own timeout.">Timeout containment</button></div>
+            <button id="run-code">Run in sandbox</button>
+            <p id="code-status" role="status" aria-live="polite">Enter a demo token to run a task.</p>
+            <div id="code-attempts"></div>
+          </section>
+        </div>
+      </section>
+      <section class="grid operator-grid" aria-label="Operator controls">
+        <div class="card"><div class="card-head"><h2>Live work</h2><span id="connection">○ Locked</span></div><div id="timeline" class="timeline"></div></div>
+        <div class="stack">
+          <div class="card"><h2>Budgets</h2><div id="budgets"></div></div>
+          <div class="card"><h2>Agent permissions</h2><div id="permissions"></div></div>
+          <div class="card"><h2>Payment receipts</h2><div id="payments"></div></div>
+        </div>
+      </section>
+    </main>
+    <dialog id="receipt"><form method="dialog"><button class="close" aria-label="Close">×</button></form><div id="receipt-body"></div></dialog>
+    <footer><a href="/">View Slack agent activity</a> · Pengwin Crew Challenge 1 sandbox</footer>
+  </div>
+</body>
+</html>
