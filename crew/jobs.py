@@ -19,7 +19,8 @@ from sqlalchemy.orm import Session
 from .audit import record
 from .config import settings
 from .db import AgentJob, ControlFlag, CrewRun, PendingOrder, Request, SessionLocal
-from .eventbrite import EventbriteClient, approval_preview as eventbrite_preview, checked_eventbrite_plan
+from .eventbrite import (EventbriteClient, approval_preview as eventbrite_preview,
+                         checked_eventbrite_plan, published_message)
 from .inference import VultrInference
 from .intake import checked_plan
 from .luma import LumaClient, LumaPlan, approval_preview, checked_luma_plan, plan_snapshot
@@ -55,7 +56,7 @@ FLOW_LABELS = {
     "natural-language": "your request",
     "luma-event": "a Luma event draft",
     "eventbrite-event": "a public RSVP event draft",
-    "code-task": "a sandboxed code task",
+    "code-task": "a code task",
 }
 ITEM_LABELS = {
     "OAT-MILK": ("oat milk carton", "oat milk cartons"),
@@ -198,32 +199,32 @@ def _approval_job(session: Session, run_id: str) -> tuple[CrewRun | None, AgentJ
 
 def review_luma_run(run_id: str, *, user_id: str) -> str:
     if not _admin_user(user_id):
-        return "Only a configured crew admin can review event details."
+        return "Only an approved Pengwin admin can review this event draft."
     with SessionLocal() as session:
         run, job = _approval_job(session, run_id)
         if run is None or job is None:
-            return "No event draft is waiting for approval under that run ID."
+            return "I can't find an event draft waiting for approval under that reference."
         plan = LumaPlan.model_validate(json.loads(job.input_json)["plan"])
         return (eventbrite_preview if run.flow == "eventbrite-event" else approval_preview)(run_id, plan)
 
 
 def approve_luma_run(run_id: str, snapshot: str, *, user_id: str) -> str:
     if not _admin_user(user_id):
-        return "Only a configured crew admin can approve an event."
+        return "Only an approved Pengwin admin can publish an event."
     with SessionLocal.begin() as session:
         run, job = _approval_job(session, run_id)
         if run is None or job is None or run.status != "WAITING_APPROVAL":
-            return "No event draft is waiting for approval under that run ID."
+            return "I can't find an event draft waiting for approval under that reference."
         if run.flow == "luma-event" and os.getenv("LUMA_ENABLED", "false").lower() != "true":
-            return "Luma publishing is not ready. The draft remains waiting; configure a Plus calendar key first."
+            return "I can't publish to Luma yet. This draft is still waiting; the calendar needs Plus access."
         if run.flow == "eventbrite-event" and os.getenv("EVENTBRITE_ENABLED", "false").lower() != "true":
-            return "Eventbrite publishing is not ready. The draft remains waiting; configure its organizer credentials first."
+            return "I can't publish to Eventbrite yet. This draft is still waiting while we fix the organizer connection."
         data = json.loads(job.input_json)
         if data["snapshot"] != snapshot:
-            return "The draft snapshot does not match. Use /crew review <run ID> before approving."
+            return "That approval code doesn't match the current draft. Use /crew review <reference> to see it again."
         plan = LumaPlan.model_validate(data["plan"])
         if plan.start_at <= datetime.now(timezone.utc):
-            return "The event start time has passed. Submit a fresh request."
+            return "That event time has passed. Send me a new date and I'll draft it again."
         data["approved_by"] = user_id
         data["approved_snapshot"] = snapshot
         job.input_json = json.dumps(data, sort_keys=True)
@@ -232,24 +233,64 @@ def approve_luma_run(run_id: str, snapshot: str, *, user_id: str) -> str:
         run.status = "RUNNING"
         record(session, agent="Control", action="event_approved", request_id=run_id,
                detail={"approver": user_id, "snapshot": snapshot})
-    provider = "Eventbrite" if run.flow == "eventbrite-event" else "Luma"
-    return f"Approved draft {snapshot}. Events is creating the {provider} event; no duplicate submission will be retried automatically."
+    return "Approved. Events is creating it now. I'll post the result here."
 
 
 def reject_luma_run(run_id: str, *, user_id: str) -> str:
     if not _admin_user(user_id):
-        return "Only a configured crew admin can reject an event."
+        return "Only an approved Pengwin admin can cancel this event draft."
     with SessionLocal.begin() as session:
         run, job = _approval_job(session, run_id)
         if run is None or job is None or run.status != "WAITING_APPROVAL":
-            return "No event draft is waiting for approval under that run ID."
+            return "I can't find an event draft waiting for approval under that reference."
         job.status = "HELD"
         job.updated_at = datetime.now(timezone.utc)
         run.status = "REJECTED"
         run.completed_at = datetime.now(timezone.utc)
         record(session, agent="Control", action="event_rejected", request_id=run_id,
                detail={"reviewer": user_id})
-    return "Event draft rejected. No event was published or invitation sent."
+    return "Canceled. Nothing was published and no invitations were sent."
+
+
+def decide_event_in_thread(*, thread_ts: str | None, user_id: str,
+                           channel_id: str, action: str) -> str:
+    """Bind a plain-English decision to the exact draft shown in that Slack thread."""
+    if action not in {"approve", "reject", "review"}:
+        raise ValueError("Unsupported event decision")
+    if not _admin_user(user_id):
+        return "Only an approved Pengwin admin can decide on an event draft."
+    if not thread_ts:
+        return "Reply inside the event draft's thread so I know which event you mean."
+    with SessionLocal() as session:
+        waiting = session.execute(select(CrewRun).where(
+            CrewRun.source_user == user_id,
+            CrewRun.channel_id == channel_id,
+            CrewRun.status == "WAITING_APPROVAL",
+            CrewRun.flow.in_(("eventbrite-event", "luma-event")),
+        )).scalars().all()
+        matches = []
+        for run in waiting:
+            key = "crew_thread_" + hashlib.sha256(run.id.encode()).hexdigest()[:24]
+            flag = session.get(ControlFlag, key)
+            if flag and flag.value == thread_ts:
+                matches.append(run.id)
+        if len(matches) != 1:
+            return "I can't match this thread to one waiting event draft. Ask Events to show the draft again."
+        run_id = matches[0]
+        if action == "approve":
+            job = session.execute(select(AgentJob).where(
+                AgentJob.run_id == run_id,
+                AgentJob.status == "WAITING_APPROVAL",
+                AgentJob.kind.in_(("eventbrite_publish", "luma_publish")),
+            )).scalar_one_or_none()
+            if job is None:
+                return "That event draft is no longer waiting for approval."
+            snapshot = json.loads(job.input_json)["snapshot"]
+    if action == "review":
+        return review_luma_run(run_id, user_id=user_id)
+    if action == "reject":
+        return reject_luma_run(run_id, user_id=user_id)
+    return approve_luma_run(run_id, snapshot, user_id=user_id)
 
 
 def claim_next_job(role: str) -> str | None:
@@ -345,8 +386,8 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
     if job.role == "Concierge":
         if run.flow == "code-task":
             return {}, [("Buyer", "code_execute", {"goal": data["text"]})], (
-                f"Run {run.id}: Buyer is running this in a disposable, offline code container. "
-                "I’ll report what actually ran and what it printed."
+                "Buyer is running the code in a fresh, isolated workspace. "
+                "I'll bring back the actual result."
             ), False
         if run.flow in {"luma-event", "eventbrite-event"}:
             try:
@@ -355,11 +396,11 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
                 plan = checker(candidate, data["text"])
             except ValueError as exc:
                 return {"clarification": str(exc)}, [], (
-                    f"Run {run.id}: {exc}. No event was published or invitation sent."
+                    f"I need one detail before I can draft the event: {exc}. Nothing was published."
                 ), False
             if plan.clarification:
                 return {"clarification": plan.clarification}, [], (
-                    f"Run {run.id}: {plan.clarification} No event was published or invitation sent."
+                    f"{plan.clarification} Nothing was published."
                 ), False
             snapshot = plan_snapshot(plan)
             public = run.flow == "eventbrite-event"
@@ -374,10 +415,10 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
                 )
             except ValueError:
                 question = "Please tell me the item, quantity, and office (Berlin or San Francisco). I haven't placed an order."
-                return {"clarification": question}, [], f"Run {run.id}: Tiny paperwork snag: {question}", False
+                return {"clarification": question}, [], question, False
             if plan.clarification:
                 return {"clarification": plan.clarification}, [], (
-                    f"Run {run.id}: {plan.clarification} I haven't placed an order."
+                    f"{plan.clarification} I haven't placed an order."
                 ), False
             steps = [
                 ("Buyer", "purchase", {
@@ -395,13 +436,13 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
             if plan.lunch_headcount is not None:
                 summary += (", " if summary else "") + f"Berlin lunch for {plan.lunch_headcount}"
             return plan.model_dump(), steps, (
-                f"Run {run.id}: Got it — {summary}. I've sent the details to the crew. "
+                f"Got it — {summary}. I've sent the details to the crew. "
                 "Buyer checks the order; Treasurer checks the budget."
             ), False
         steps = FLOW_STEPS[run.flow]
         return {"steps": len(steps)}, list(steps), (
-            f"Run {run.id}: On it — {flow_label(run.flow)} is split into {len(steps)} tasks. "
-            "I'm keeping the chaos in one thread."
+            f"On it — the crew is handling {flow_label(run.flow)}. "
+            "I'll keep the updates in this thread."
         ), False
     if job.role == "Buyer" and job.kind == "code_execute":
         if settings.sandbox_mode != "docker":
@@ -427,25 +468,25 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
                 output = attempts[-1]["stdout"].strip() or "(no stdout)"
                 printable = "".join(c for c in output if c.isprintable() or c in "\n\t")[:900]
                 return {"attempts": attempts, "result": output}, [], (
-                    f"Run {run.id}: Buyer executed Python in the offline sandbox. "
-                    f"Exit 0 after {index + 1} attempt(s); code hash {code_hash}. "
-                    f"Actual output: {printable}"
+                    "Done. I ran the code in a fresh, isolated workspace"
+                    + (" and fixed an error on the second try" if index else "")
+                    + f". It printed:\n{printable}"
                 ), False
             if exit_code == 124:
                 return {"attempts": attempts}, [], (
-                    f"Run {run.id}: Buyer contained a timed-out Python task in the offline sandbox. "
-                    f"Exit 124; code hash {code_hash}. The container was removed; no retry or provider action was made."
+                    "I stopped that code after 10 seconds. The isolated workspace was removed, "
+                    "so it couldn't keep running or affect the rest of Pengwin."
                 ), True
             if index == 0:
                 draft = planner.code_draft(goal=goal, previous_code=draft.code,
                                            stderr=attempts[-1]["stderr"])
         return {"attempts": attempts}, [], (
-            f"Run {run.id}: Buyer ran the code twice in fresh sandboxes. Both attempts failed; "
-            "the run is held for review. No provider action was made."
+            "I tried twice in fresh, isolated workspaces. Both attempts failed, so I stopped. "
+            "Ask me to try a different approach."
         ), True
     if job.role == "Buyer" and job.kind == "purchase":
         prepared = prepare_purchase(**data, source="slack", source_user=run.source_user)
-        message = (f"Run {run.id}: I checked the numbers: "
+        message = ("I checked the quote: "
                    f"{_item_phrase(prepared['proposed_sku'], prepared['proposed_qty'])} "
                    f"for {_money(prepared['amount_cents'], prepared['currency'])}. "
                    "Treasurer gets the final word.")
@@ -457,7 +498,7 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
         result = {"request_id": data["request_id"], "order_id": order_id}
         next_jobs = [("Treasurer", "pay", {"order_id": order_id, "request_id": data["request_id"]})]
         return result, next_jobs, (
-            f"Run {run.id}: Good catch — the first quote didn't match the request. "
+            "Good catch — the first quote didn't match your request. "
             "I rebuilt it with the requested quantity and sent it back for review."
         ), False
     if job.role == "Events" and job.kind == "lunch_prepare":
@@ -465,15 +506,15 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
         next_jobs = [("Treasurer", "pay", {"order_id": prepared["first_order_id"],
                                             "request_id": prepared["request_id"], "lunch": True})]
         return prepared, next_jobs, (
-            f"Run {run.id}: Berlin lunch for {data['headcount']} is penciled in for "
+            f"Berlin lunch for {data['headcount']} is penciled in for "
             f"{prepared['date']} at noon on a calendar draft. "
             "The venue hasn't said yes, so keep the victory lap on ice. No table is reserved."
         ), False
     if job.role == "Events" and job.kind == "lunch_complete":
         complete_berlin_lunch(data["request_id"], data["payment_status"])
         return {"request_id": data["request_id"], "payment_status": data["payment_status"]}, [], (
-            f"Run {run.id}: The lunch draft now shows {data['payment_status']}. "
-            "The invite is ready; the venue still hasn't confirmed a reservation."
+            "The lunch invite is ready. The budget step is recorded, "
+            "but no restaurant has confirmed a reservation."
         ), False
     if job.role == "Events" and job.kind == "luma_publish":
         if not data.get("approved_by") or data.get("approved_snapshot") != data.get("snapshot"):
@@ -491,9 +532,9 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
         skipped = client.send_invites(event_id, plan.guests)
         return {"event_id": event_id, "guest_count": len(plan.guests),
                 "skipped_count": len(skipped)}, [], (
-            f"Run {run.id}: Luma created event {event_id}. Invitations were requested for "
-            f"{len(plan.guests)} guest(s); {len(skipped)} were skipped by Luma. "
-            "Check the event guest list for final delivery status."
+            f"{plan.name} is on the calendar. I asked Luma to invite {len(plan.guests)} people"
+            + (f"; it skipped {len(skipped)}" if skipped else "")
+            + ". Check the guest list to confirm delivery."
         ), False
     if job.role == "Events" and job.kind == "eventbrite_publish":
         if not data.get("approved_by") or data.get("approved_snapshot") != data.get("snapshot"):
@@ -514,17 +555,15 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
             record(session, agent="Events", action="eventbrite_free_ticket_created", request_id=run.id,
                    detail={"event_id": event_id, "ticket_id": ticket_id})
         url = client.publish(event_id)
-        return {"event_id": event_id, "ticket_id": ticket_id, "url": url}, [], (
-            f"Run {run.id}: Eventbrite published a free RSVP page for {plan.capacity} people: {url}. "
-            "The registration page is live; no individual invitation email was sent."
-        ), False
+        return {"event_id": event_id, "ticket_id": ticket_id, "url": url}, [], published_message(plan, url), False
     if job.role == "Treasurer" and job.kind == "pay":
         payment = pay_pending_order(data["order_id"], is_admin=_admin_user(run.source_user))
         result = {"request_id": data["request_id"], "order_id": data["order_id"],
                   "payment_id": payment.id, "payment_status": payment.status,
                   "blocked_rule": payment.blocked_rule}
         if payment.status in UNCERTAIN_PAYMENT_STATUSES:
-            return result, [], f"Run {run.id}: payment outcome is uncertain. The run is held for reconciliation; no retry was made.", True
+            return result, [], ("I can't confirm whether that payment request went through. "
+                                "I've stopped here and won't send it again until we check with Airwallex."), True
         next_jobs = []
         if data.get("lunch"):
             next_jobs.append(("Events", "lunch_complete", {
@@ -540,18 +579,24 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
             if mismatch:
                 next_jobs.append(("Buyer", "requote", {"request_id": data["request_id"]}))
         if payment.status == "SUBMITTED_SANDBOX":
-            message = (f"Run {run.id}: Budget cleared. I submitted the sandbox transfer for "
+            message = ("Budget approved. Airwallex accepted a test transfer for "
                        f"{_money(payment.amount_cents, payment.currency)}. "
                        "Airwallex has it; settlement is not confirmed.")
         elif payment.status == "SIMULATED":
-            message = (f"Run {run.id}: Budget says yes. I recorded "
-                       f"a {_money(payment.amount_cents, payment.currency)} demo checkout. "
-                       "Order receipt is in the run record.")
+            message = ("The amount fits the demo budget. I recorded "
+                       f"{_money(payment.amount_cents, payment.currency)} for this checkout. "
+                       "No real card was charged.")
         elif next_jobs and next_jobs[0][1] == "requote":
-            message = f"Run {run.id}: policy blocked {payment.blocked_rule}; Buyer is preparing a corrected quote."
+            message = "That quote didn't match your request. Buyer is correcting it before anything moves forward."
         else:
-            message = f"Run {run.id}: payment {payment.status}" + (
-                f" ({payment.blocked_rule})." if payment.blocked_rule else ".")
+            reasons = {
+                "BALANCE": "There isn't enough room in the budget.",
+                "BENEFICIARY_MISSING": "The payment destination isn't set up.",
+                "QUANTITY_SANITY": "The quantity needs another look.",
+                "SKU_MISMATCH": "The item doesn't match your request.",
+                "VENDOR_ALLOWLIST": "That vendor isn't approved for this workspace.",
+            }
+            message = reasons.get(payment.blocked_rule, "I couldn't clear that payment. Nothing was charged.")
         return result, next_jobs, message, False
     raise ValueError("Unsupported job")
 
@@ -568,7 +613,10 @@ def _notify(run_id: str, role: str, message: str) -> None:
             existing = session.get(ControlFlag, key)
             channel_id = run.channel_id
             thread_ts = existing.value if existing else None
-        ts = post_role_update(role, channel_id, message, thread_ts=thread_ts)
+        # Keep identifiers in the durable run record, not at the front of chat.
+        prefix = f"Run {run_id}: "
+        ts = post_role_update(role, channel_id,
+                              message.removeprefix(prefix), thread_ts=thread_ts)
         if role == "Concierge" and not thread_ts:
             with SessionLocal.begin() as session:
                 session.add(ControlFlag(key=key, value=ts))
@@ -626,5 +674,5 @@ def run_one_job(role: str) -> bool:
                 record(session, agent=role, action="agent_job_failed", request_id=run_id,
                        detail={"job_id": job_id, "kind": job.kind,
                                "error_type": type(exc).__name__}, severity="error")
-        _notify(run_id, role, f"Run {run_id}: {role} stopped; operator review is required before another attempt.")
+        _notify(run_id, role, "I hit a problem and stopped safely. Please check this request before trying again.")
     return True

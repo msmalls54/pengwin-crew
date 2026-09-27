@@ -34,14 +34,14 @@ with SessionLocal.begin() as session:
 
 report = dialogue.spend_report('how much have we spent today?', now=now)
 assert '€58.00' in report, report
-assert 'Ledger today:' in report and 'demo checkout' in report, report
+assert 'recorded today:' in report and 'demo checkout' in report, report
 assert '€58.00' not in dialogue.spend_report('yesterday', now=now)
 
 dialogue.spend_report = lambda text: report
 answer = dialogue.answer('Treasurer', 'how much have we spent today?', user_id='U-owner',
                          channel_id='C-demo', delivery_id='event:1')
 assert '€58.00' in answer and 'demo checkout' in answer
-assert "won't move money" in dialogue.answer('Treasurer', 'please transfer me €10',
+assert "won't send money" in dialogue.answer('Treasurer', 'please transfer me €10',
     user_id='U-owner', channel_id='C-demo', delivery_id='event:2')
 
 calls = []

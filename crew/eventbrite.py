@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .luma import LumaPlan, checked_luma_plan, plan_snapshot
+from .luma import LumaPlan, checked_luma_plan, event_time_label
 
 
 def checked_eventbrite_plan(plan: LumaPlan, request_text: str) -> LumaPlan:
@@ -39,15 +39,24 @@ def checked_eventbrite_plan(plan: LumaPlan, request_text: str) -> LumaPlan:
 
 
 def approval_preview(run_id: str, plan: LumaPlan) -> str:
-    place = plan.location or plan.meeting_url
-    snapshot = plan_snapshot(plan)
+    place = f"Online: {plan.meeting_url}" if plan.meeting_url else f"At: {plan.location}"
+    description = f"\nAbout: {plan.description}" if plan.description else ""
     return (
-        f"Run {run_id}: Eventbrite public RSVP draft — {plan.name}. "
-        f"{plan.start_at.isoformat()} to {plan.end_at.isoformat()} ({plan.timezone}); "
-        f"location: {place}; description: {plan.description or 'none'}; "
-        f"free RSVP capacity: {plan.capacity}. No page has been published or invitations sent. "
-        f"Review snapshot {snapshot} and approve in Slack with /crew approve {run_id} {snapshot}, "
-        f"or reject with /crew reject {run_id}."
+        "🐧 Here's the event draft. Nothing is live yet.\n"
+        f"{plan.name}\n"
+        f"When: {event_time_label(plan)}\n"
+        f"{place}\n"
+        f"Capacity: {plan.capacity} free spots{description}\n\n"
+        "Reply in this thread with @Pengwin Events approve this event, or @Pengwin Events cancel this draft."
+    )
+
+
+def published_message(plan: LumaPlan, url: str) -> str:
+    return (
+        f"🐧 Doors are open. {plan.name} is live.\n"
+        f"{event_time_label(plan)} · {plan.capacity} free spots\n"
+        f"RSVP: {url}\n"
+        "No invitation emails went out. Share the link when you're ready."
     )
 
 

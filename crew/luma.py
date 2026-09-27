@@ -69,17 +69,33 @@ def plan_snapshot(plan: LumaPlan) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
 
+def event_time_label(plan: LumaPlan) -> str:
+    zone = ZoneInfo(plan.timezone)
+    start = plan.start_at.astimezone(zone)
+    end = plan.end_at.astimezone(zone)
+
+    def clock(value: datetime) -> str:
+        hour = value.hour % 12 or 12
+        minute = f":{value.minute:02d}" if value.minute else ""
+        return f"{hour}{minute} {'AM' if value.hour < 12 else 'PM'}"
+
+    day = f"{start:%A, %B} {start.day}, {start.year}"
+    if start.date() == end.date():
+        return f"{day}, {clock(start)}–{clock(end)} {end:%Z}"
+    return f"{day}, {clock(start)} {start:%Z} to {end:%A, %B} {end.day}, {clock(end)} {end:%Z}"
+
+
 def approval_preview(run_id: str, plan: LumaPlan) -> str:
     guests = ", ".join(plan.guests) if plan.guests else "none"
-    place = plan.location or plan.meeting_url
-    description = plan.description or "none"
+    place = f"Online: {plan.meeting_url}" if plan.meeting_url else f"At: {plan.location}"
+    description = f"\nAbout: {plan.description}" if plan.description else ""
     return (
-        f"Run {run_id}: Luma event draft — {plan.name}. "
-        f"{plan.start_at.isoformat()} to {plan.end_at.isoformat()} ({plan.timezone}); "
-        f"location: {place}; description: {description}; guests: {guests}. "
-        f"No event or invitations have been sent. Review snapshot {plan_snapshot(plan)} and "
-        f"approve in Slack with /crew approve {run_id} {plan_snapshot(plan)}, "
-        f"or reject with /crew reject {run_id}."
+        "🐧 Here's the calendar draft. Nothing has been created yet.\n"
+        f"{plan.name}\n"
+        f"When: {event_time_label(plan)}\n"
+        f"{place}\n"
+        f"Guests: {guests}{description}\n\n"
+        "Reply in this thread with @Pengwin Events approve this event, or @Pengwin Events cancel this draft."
     )
 
 

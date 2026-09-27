@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from crew.luma import LumaPlan, approval_preview, checked_luma_plan
+from crew.luma import LumaPlan, approval_preview, checked_luma_plan, event_time_label
 
 
 def _future_plan(**changes):
@@ -25,8 +25,10 @@ def test_draft_preview_shows_every_provider_field_and_rejects_invented_guest():
     preview = approval_preview("run-id", plan)
     assert all(value in preview for value in (
         "Pengwin lunch", "Lunch with the team", "Berlin office", "guest@example.com",
-        plan.start_at.isoformat(), plan.end_at.isoformat(),
+        event_time_label(plan), "@Pengwin Events approve this event",
     ))
+    assert plan.start_at.isoformat() not in preview
+    assert "run-id" not in preview
     with pytest.raises(ValueError, match="explicitly present"):
         checked_luma_plan(_future_plan(guests=["stranger@example.com"]), request)
 
@@ -74,10 +76,10 @@ assert jobs.get_run(run_id)['status'] == 'WAITING_APPROVAL'
 assert not jobs.run_one_job('Events')
 assert 'guest@example.com' in jobs.review_luma_run(run_id, user_id='U_TEST')
 snapshot = plan_snapshot(plan)
-assert 'does not match' in jobs.approve_luma_run(run_id, '000000000000', user_id='U_TEST')
-assert 'Only a configured' in jobs.approve_luma_run(run_id, snapshot, user_id='U_OTHER')
+assert "doesn't match" in jobs.approve_luma_run(run_id, '000000000000', user_id='U_TEST')
+assert 'Only an approved Pengwin admin' in jobs.approve_luma_run(run_id, snapshot, user_id='U_OTHER')
 assert 'Approved' in jobs.approve_luma_run(run_id, snapshot, user_id='U_TEST')
-assert 'No event draft' in jobs.approve_luma_run(run_id, snapshot, user_id='U_TEST')
+assert "can't find an event draft" in jobs.approve_luma_run(run_id, snapshot, user_id='U_TEST')
 calls = []
 class FakeLuma:
     def create_event(self, plan):

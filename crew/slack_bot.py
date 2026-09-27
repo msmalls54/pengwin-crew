@@ -14,14 +14,13 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .audit import record
 from .config import settings
-from .db import Budget, ControlFlag, SessionLocal
+from .db import Budget, ControlFlag, CrewRun, SessionLocal
 from .seed import seed_demo
-HELP = ("Mention Concierge with a plain-English request, such as 'please order 3 oat milk cartons "
-        "and 2 coffee bags for Berlin,' or use `/crew order ...`. Include quantities and the office. "
-        "For a public RSVP event, use `/crew event <name, date, time, place/link, capacity>` or mention Events. "
-        "For a disposable Python task, use `/crew code <plain-English goal>`. "
-        "The demo shortcuts are `/crew pantry`, `/crew welcome`, and `/crew hoodies`. "
-        "Use `/crew run <id>`, `/crew review <id>`, `/crew status`, or `/crew budgets` to check progress.")
+HELP = ("Tell Concierge or Events what you need in ordinary English. For an event, include the "
+        "name, date, start and end time, time zone, online link, and number of free spots. "
+        "Concierge can also handle office-supply requests and code tasks. "
+        "Commands are optional: /crew event, /crew code, /crew status, and /crew budgets. "
+        "Ask Concierge 'what happened with my last request?' or use /crew latest for progress.")
 FLOW_COMMANDS = {"pantry": "berlin-pantry", "welcome": "welcome-kit", "hoodies": "hoodie-attack"}
 
 
@@ -78,18 +77,22 @@ def queue_allowed_flow(flow: str, *, user_id: str, channel_id: str,
     if not claim_delivery(delivery_id):
         return "This Slack request was already received, or has no delivery ID. Send a new request if needed."
     try:
-        run_id = _submit_run(flow, source_user=user_id, channel_id=channel_id,
-                             request_text=request_text)
-        from .jobs import flow_label
-        return (f"On it — I've queued {flow_label(flow)} as run {run_id}. "
-                "I'll bring the crew into this channel as the work moves along.")
+        _submit_run(flow, source_user=user_id, channel_id=channel_id,
+                    request_text=request_text)
+        if flow in {"eventbrite-event", "luma-event"}:
+            lead = "On it. I'll draft the event and show you the details before anything goes live."
+        elif flow == "code-task":
+            lead = "On it. Buyer will run this in an isolated workspace and bring back the result."
+        else:
+            lead = "On it. I'll bring the right teammates into this thread and keep you posted."
+        return lead
     except Exception:
         # Preserve the claim: a retry must not create a second purchase-capable job.
         with SessionLocal.begin() as session:
             record(session, agent="Concierge", action="slack_queue_failed",
                    detail={"flow": flow, "delivery_key": hashlib.sha256(delivery_id.encode()).hexdigest()},
                    severity="error")
-        return "The request could not be queued. Check the crew audit timeline before sending a new request."
+        return "I couldn't start that request. Please check its status before sending it again so we don't create a duplicate."
 
 
 def status_text(*, budgets: bool) -> str:
@@ -97,15 +100,21 @@ def status_text(*, budgets: bool) -> str:
         rows = session.execute(select(Budget).order_by(Budget.office_id, Budget.category)).scalars().all()
         flag = session.get(ControlFlag, "freeze")
         frozen = settings.freeze or bool(flag and flag.value == "true")
-        lines = [f"Payments: {'FROZEN' if frozen else 'active'}",
-                 f"Planner: {settings.planner_mode}" +
-                 (f" ({settings.vultr_model})" if settings.planner_mode == "vultr" else ""),
-                 f"Browser: {settings.sandbox_mode}; payments: {settings.payment_mode}"]
+        lines = ["Pengwin can take requests here in Slack."]
+        lines.append("Spending is paused." if frozen else "Budget checks are on.")
+        if settings.payment_mode == "simulated":
+            lines.append("Orders use the demo budget; no real card is charged.")
+        else:
+            lines.append("Payments use Airwallex test funds; they do not move real money.")
+        if settings.sandbox_mode == "docker":
+            lines.append("Code runs in a separate, disposable workspace.")
         if budgets:
+            lines.append("Available budgets:")
             lines.extend(
-                f"{row.office_id} {row.category}: "
-                f"{(row.limit_cents - row.spent_cents - row.reserved_cents) / 100:.2f} "
-                f"{'USD' if row.office_id == 'SF' else 'EUR'} remaining"
+                f"{'San Francisco' if row.office_id == 'SF' else 'Berlin'} · "
+                f"{row.category.replace('-', ' ')}: "
+                f"{'$' if row.office_id == 'SF' else '€'}"
+                f"{(row.limit_cents - row.spent_cents - row.reserved_cents) / 100:,.2f} left"
                 for row in rows
             )
         return "\n".join(lines)
@@ -117,23 +126,68 @@ def run_status_text(run_id: str, *, user_id: str) -> str:
     try:
         canonical_id = str(UUID(run_id))
     except ValueError:
-        return "Use a full run ID from Concierge's reply."
+        return "Ask Concierge what happened with your last request, or use /crew latest."
     from .jobs import get_run
 
     run = get_run(canonical_id)
     if run is None or (run["source_user"] != user_id and not is_slack_admin(user_id)):
         return "No run is available for this Slack user."
-    lines = [f"Run {run['id']}: {run['status']} ({run['flow']})."]
+    status_labels = {
+        "QUEUED": "I have your request and will start shortly.",
+        "RUNNING": "The crew is working on it.",
+        "WAITING_APPROVAL": "The event draft is ready for your approval.",
+        "COMPLETE": "Done.",
+        "HELD": "I paused this because it needs a human check.",
+        "FAILED": "I couldn't finish this request.",
+        "REJECTED": "You canceled this draft.",
+    }
+    if run["flow"] == "eventbrite-event":
+        if run["status"] == "WAITING_APPROVAL":
+            return ("The event draft is ready. Check its Slack thread, then reply there with "
+                    "@Pengwin Events approve this event or @Pengwin Events cancel this draft.")
+        for job in run["jobs"]:
+            if job["kind"] == "eventbrite_publish" and job["output"].get("url"):
+                return f"Done. Events published your public RSVP page:\n{job['output']['url']}"
+    if run["flow"] == "code-task" and run["status"] == "COMPLETE":
+        return "Done. Buyer ran the code. The result is in your request's Slack thread."
+    action_labels = {
+        "purchase": "the order quote",
+        "requote": "the corrected quote",
+        "pay": "the budget",
+        "code_execute": "the code",
+        "lunch_prepare": "the lunch plan",
+        "lunch_complete": "the lunch details",
+        "eventbrite_publish": "the RSVP page",
+        "luma_publish": "the calendar event",
+    }
+    lines = [status_labels.get(run["status"], "Here's the latest on your request.")]
     for job in run["jobs"][-12:]:
-        line = f"{job['role']} {job['kind']}: {job['status']}"
-        if job["role"] == "Treasurer" and job["output"].get("payment_status"):
-            line += f" / {job['output']['payment_status']}"
-            if job["output"].get("blocked_rule"):
-                line += f" ({job['output']['blocked_rule']})"
-        lines.append(line)
+        if job["kind"] == "dispatch":
+            continue
+        task = action_labels.get(job["kind"], "their part")
+        if job["status"] == "DONE":
+            lines.append(f"{job['role']} finished {task}.")
+        elif job["status"] == "RUNNING":
+            lines.append(f"{job['role']} is working on {task}.")
+        elif job["status"] == "QUEUED":
+            lines.append(f"{job['role']} will handle {task} next.")
+        elif job["status"] in {"HELD", "FAILED"}:
+            lines.append(f"{job['role']} stopped while handling {task}.")
     if run["status"] in {"HELD", "FAILED"}:
-        lines.append("Operator review is required; do not repeat a payment request blindly.")
+        lines.append("Please check with the crew before sending the same request again.")
     return "\n".join(lines)
+
+
+def latest_run_status_text(*, user_id: str, channel_id: str) -> str:
+    if not is_slack_allowed(user_id) or not is_demo_channel(channel_id):
+        return "I can't show requests from outside your Pengwin channel."
+    with SessionLocal() as session:
+        run_id = session.execute(select(CrewRun.id).where(
+            CrewRun.source_user == user_id, CrewRun.channel_id == channel_id,
+        ).order_by(CrewRun.created_at.desc(), CrewRun.id.desc()).limit(1)).scalar_one_or_none()
+    if run_id is None:
+        return "I don't see a recent request from you in this channel yet."
+    return run_status_text(run_id, user_id=user_id)
 
 
 def handle_command(command: dict) -> str:
@@ -148,6 +202,8 @@ def handle_command(command: dict) -> str:
                                   delivery_id=("command:" + command["trigger_id"]) if command.get("trigger_id") else "")
     if action.startswith("run "):
         return run_status_text(action.removeprefix("run ").strip(), user_id=user_id)
+    if action == "latest":
+        return latest_run_status_text(user_id=user_id, channel_id=channel_id)
     if action.startswith("review "):
         from .jobs import review_luma_run
         return review_luma_run(action.removeprefix("review ").strip(), user_id=user_id)
@@ -155,18 +211,18 @@ def handle_command(command: dict) -> str:
         from .jobs import approve_luma_run
         parts = raw.split()
         if len(parts) != 3 or not re.fullmatch(r"[0-9a-f]{12}", parts[2]):
-            return "Use /crew approve <run ID> <12-character draft snapshot>."
+            return "Copy the approval command from the event draft. It includes the request reference and approval code."
         try:
             run_id = str(UUID(parts[1]))
         except ValueError:
-            return "Use the full run ID from the event draft."
+            return "Copy the full request reference from the event draft."
         return approve_luma_run(run_id, parts[2], user_id=user_id)
     if action.startswith("reject "):
         from .jobs import reject_luma_run
         try:
             run_id = str(UUID(raw.split(maxsplit=1)[1].strip()))
         except ValueError:
-            return "Use the full run ID from the event draft."
+            return "Copy the full request reference from the event draft."
         return reject_luma_run(run_id, user_id=user_id)
     if action in ("status", "budgets"):
         if not is_slack_allowed(user_id):
@@ -231,8 +287,13 @@ def build_app() -> App:
             return
         text = re.sub(r"<@[^>]+>", "", event.get("text", "")).strip()
         from .dialogue import answer
-        say(answer("Concierge", text, user_id=user_id, channel_id=channel_id,
-                   delivery_id=("event:" + body["event_id"]) if body.get("event_id") else ""))
+        reply = answer("Concierge", text, user_id=user_id, channel_id=channel_id,
+                       delivery_id=("event:" + body["event_id"]) if body.get("event_id") else "",
+                       thread_ts=event.get("thread_ts"))
+        options = {"text": reply}
+        if event.get("thread_ts"):
+            options["thread_ts"] = event["thread_ts"]
+        say(**options)
 
     @bot.command("/crew")
     def command(ack, client, command):

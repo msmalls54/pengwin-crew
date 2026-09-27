@@ -67,7 +67,8 @@ assert not any(jobs.run_one_job(role) for role in jobs.ROLE_KINDS)
 assert len(jobs.get_run(run_id)['jobs']) == before
 assert {'Concierge', 'Buyer', 'Treasurer'} <= {role for role, _ in announcements}
 from crew.slack_bot import run_status_text
-assert 'COMPLETE' in run_status_text(run_id, user_id='U_TEST')
+assert 'Done.' in run_status_text(run_id, user_id='U_TEST')
+assert all(not message.startswith('Run ') for _, message in announcements)
 assert 'No run is available' in run_status_text(run_id, user_id='U_OTHER')
 """)
 
@@ -176,7 +177,7 @@ with SessionLocal() as session:
     payments = session.execute(select(Payment)).scalars().all()
     assert [p.status for p in payments] == ['SIMULATED', 'SIMULATED']
 assert any('3 oat milk cartons' in message for role, message in messages if role == 'Concierge')
-assert any('demo checkout' in message for role, message in messages if role == 'Treasurer')
+assert any('No real card was charged' in message for role, message in messages if role == 'Treasurer')
 """)
 
 

@@ -76,14 +76,18 @@ class VultrInference:
             "Treasurer": "You are a skeptical finance lead who separates receipts from reality.",
         }[role]
         capabilities = {
-            "Concierge": "You route supported office supply, swag, lunch, and code-analysis requests to bounded workflows and can report run status.",
-            "Buyer": "You take supported office supply and swag requests, run sandboxed product checks, create pending demo orders, and send budget checks to Treasurer.",
-            "Events": "You take supported team lunch requests and coordinate the plan and budget check; a plan is not a booking.",
-            "Treasurer": "You report Pengwin ledger totals and budgets and apply payment controls; live payments are disabled in this deployment.",
+            "Concierge": "You coordinate office supplies, swag, events, and code tasks and can explain progress.",
+            "Buyer": "You check supported office-supply and swag quotes, prepare demo orders, and run requested code in isolation.",
+            "Events": "You draft team lunches and can publish free Eventbrite registration pages after the user approves the exact draft. A lunch plan is not a restaurant booking.",
+            "Treasurer": "You explain budgets and recorded demo spending. Real payments are disabled in this deployment.",
         }[role]
         system = (
             f"You are Pengwin {role} in a private office Slack channel. {persona} {capabilities} "
-            "Reply to the employee's message in 1-3 short sentences. You may converse and explain "
+            "Reply to the employee's message in 1-3 short sentences. Write like a sharp, helpful "
+            "coworker using everyday English. Lead with the answer or next step. Never lead with a "
+            "run ID, status code, provider name, or technical term; show an ID only if asked. "
+            "Do not use words like workflow, sandbox, provider outcome, or reconciliation unless asked. "
+            "You may converse and explain "
             "the crew's capabilities. This particular conversation turn has no tools and performs no "
             "external action, but clear action requests are routed separately to the supported workflows. "
             "Do not tell the employee you cannot run tools or take action in general. "

@@ -61,7 +61,7 @@ assert run['jobs'][-1]['output']['result'] == '42'
 assert [attempt['exit_code'] for attempt in run['jobs'][-1]['output']['attempts']] == [1, 0]
 assert len(calls) == 2
 assert all(value['goal'] == 'Calculate 19 plus 23' for _, value in calls)
-assert any('Actual output: 42' in message for _, message in messages)
+assert any('It printed:\\n42' in message for _, message in messages)
 assert not jobs.run_one_job('Buyer')
 """
     result = subprocess.run([sys.executable, "-c", script], env=env,
@@ -105,7 +105,7 @@ assert run['status'] == 'HELD', run
 assert len(calls) == 1
 assert run['jobs'][-1]['output']['attempts'][0]['exit_code'] == 124
 assert 'timed out' in run['jobs'][-1]['output']['attempts'][0]['stderr']
-assert any('contained a timed-out Python task' in message for _, message in messages)
+assert any('stopped that code after 10 seconds' in message for _, message in messages)
 """
     result = subprocess.run([sys.executable, "-c", script], env=env,
                             capture_output=True, text=True, timeout=45)

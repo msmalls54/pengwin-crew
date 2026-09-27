@@ -42,7 +42,8 @@ def build_app(role: str) -> App:
             return
         text = re.sub(r"<@[^>]+>", "", event.get("text", "")).strip()
         delivery_id = "event:" + body.get("event_id", "") if body.get("event_id") else ""
-        reply = answer(role, text, user_id=user_id, channel_id=channel_id, delivery_id=delivery_id)
+        reply = answer(role, text, user_id=user_id, channel_id=channel_id,
+                       delivery_id=delivery_id, thread_ts=event.get("thread_ts"))
         options = {"text": reply}
         if event.get("thread_ts"):
             options["thread_ts"] = event["thread_ts"]

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from crew.eventbrite import EventbriteClient, checked_eventbrite_plan
+from crew.eventbrite import EventbriteClient, approval_preview, checked_eventbrite_plan, published_message
 from crew.luma import LumaPlan
 
 
@@ -84,6 +84,19 @@ def test_eventbrite_summary_preserves_complete_meeting_url(monkeypatch):
     assert not summary.endswith("/PengwinSafeAgentsLive202610022")
 
 
+def test_event_messages_lead_with_human_details():
+    plan = _plan(name="Pengwin: Safe AI Agents Live", capacity=40)
+    draft = approval_preview("run-id", plan)
+    live = published_message(plan, "https://www.eventbrite.com/e/test-tickets-12345")
+    assert draft.startswith("🐧 Here's the event draft.")
+    assert "When:" in draft and "40 free spots" in draft
+    assert plan.start_at.isoformat() not in draft
+    assert "@Pengwin Events approve this event" in draft and "run-id" not in draft
+    assert live.startswith("🐧 Doors are open.")
+    assert "40 free spots" in live and "RSVP: https://www.eventbrite.com/" in live
+    assert "Run run-id" not in live
+
+
 def test_eventbrite_publishing_waits_for_exact_slack_approval(tmp_path):
     env = os.environ.copy()
     env.update({
@@ -97,6 +110,7 @@ def test_eventbrite_publishing_waits_for_exact_slack_approval(tmp_path):
 from datetime import datetime, timedelta, timezone
 from crew.seed import seed_demo
 import crew.jobs as jobs
+from crew.dialogue import answer
 from crew.luma import LumaPlan, plan_snapshot
 
 seed_demo(reset=True)
@@ -114,8 +128,12 @@ assert jobs.run_one_job('Concierge')
 assert jobs.get_run(run_id)['status'] == 'WAITING_APPROVAL'
 assert not jobs.run_one_job('Events')
 snapshot = plan_snapshot(plan)
-assert 'does not match' in jobs.approve_luma_run(run_id, '000000000000', user_id='U_TEST')
-assert 'Approved' in jobs.approve_luma_run(run_id, snapshot, user_id='U_TEST')
+assert "doesn't match" in jobs.approve_luma_run(run_id, '000000000000', user_id='U_TEST')
+assert 'Reply inside' in answer('Events', 'approve this event', user_id='U_TEST',
+                               channel_id='C_DEMO', delivery_id='event:wrong')
+assert jobs.get_run(run_id)['status'] == 'WAITING_APPROVAL'
+assert 'Approved' in answer('Events', 'approve this event', user_id='U_TEST',
+                            channel_id='C_DEMO', delivery_id='event:approve', thread_ts='123.45')
 calls = []
 class FakeEventbrite:
     def create_draft(self, plan):
@@ -129,7 +147,8 @@ assert jobs.run_one_job('Events')
 assert not jobs.run_one_job('Events')
 assert calls == ['draft', ('ticket', '12345', 25), ('publish', '12345')]
 assert jobs.get_run(run_id)['status'] == 'COMPLETE'
-assert jobs.get_run(run_id)['jobs'][-1]['output']['url'].startswith('https://www.eventbrite.com/')
+published_job = next(job for job in jobs.get_run(run_id)['jobs'] if job['kind'] == 'eventbrite_publish')
+assert published_job['output']['url'].startswith('https://www.eventbrite.com/')
 
 # If publishing times out after a provider-side mutation, keep the known IDs
 # and hold the run. Never submit the event again on a worker retry.
@@ -145,9 +164,10 @@ assert 'Approved' in jobs.approve_luma_run(second, snapshot, user_id='U_TEST')
 assert jobs.run_one_job('Events')
 held = jobs.get_run(second)
 assert held['status'] == 'HELD'
-assert held['jobs'][-1]['output']['event_id'] == '12345'
-assert held['jobs'][-1]['output']['ticket_id'] == '67890'
-assert held['jobs'][-1]['error'] == 'TimeoutError'
+publish_job = next(job for job in held['jobs'] if job['kind'] == 'eventbrite_publish')
+assert publish_job['output']['event_id'] == '12345'
+assert publish_job['output']['ticket_id'] == '67890'
+assert publish_job['error'] == 'TimeoutError'
 assert not jobs.run_one_job('Events')
 assert calls.count(('publish-timeout', '12345')) == 1
 """
