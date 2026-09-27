@@ -6,6 +6,8 @@ Pengwin lives in the private `#pengwin-ops` Slack channel. Ask Concierge to plan
 
 **Live judge lab:** [https://104-156-229-63.sslip.io](https://104-156-229-63.sslip.io) shows the sanitized activity feed publicly; the runnable sandbox requires a demo token shared privately. [Run the demo](docs/demo-runbook.md) with Slack as the crew's workplace and the browser as execution proof.
 
+**Submission:** [Watch the 59-second demo](https://104-156-229-63.sslip.io/static/pengwin-challenge1-demo.mp4) and [view the five-slide deck](assets/deck/pengwin-agent-arena-submission.pdf). The Slack request in the video is labelled as a bot-authored live worker test.
+
 **See the executed result:** [Vultr sandbox receipt](docs/sandbox-execution-receipt.md). A live model wrote Python for “Calculate 19 plus 23”; the remote container ran it and returned `42`. A separate infinite loop stopped at the ten-second limit, and no ephemeral containers remained. Pengwin is a fictional software and design firm with offices in San Francisco and Berlin; its stores, people, addresses, and transaction examples are demo data.
 
 The control VM holds durable projects, scoped conversation turns, task and audit records, budgets, and approval checks. A second Vultr VM runs disposable browser and code containers without payment, calendar, or Slack credentials. [Talk to the crew](#talk-to-the-crew), [inspect the sandbox receipt](docs/sandbox-execution-receipt.md), or [run locally](#run-locally).
