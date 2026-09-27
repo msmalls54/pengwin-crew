@@ -1,22 +1,38 @@
 # Pengwin Crew
 
-## A crew that works where your team already talks
+## Run office operations from one Slack channel
 
-Pengwin lives in the private `#pengwin-ops` Slack channel. Ask Concierge to plan an event, source water bottles, and draft invitations in one message. Concierge gives Events, Buyer, and Treasurer their parts; each reports in the same thread. The crew remembers the project's verified work after a restart. The public page shows one saved project and the work each agent completed.
+Pengwin brings event coordination, office snacks, swag sourcing, and budget decisions into the Slack thread where the team already works. Ask Concierge once; Events, Buyer, and Treasurer each take their part and return their work to the same conversation. The crew saves the project, so the next question starts with the plan already in hand. San Francisco and Berlin work in their own USD and EUR budgets.
 
-**Live demo:** [See the saved event plan and four-agent activity](https://104-156-229-63.sslip.io). The separate [Challenge 1 sandbox](https://104-156-229-63.sslip.io/sandbox) shows the containment receipt; a new run requires a demo token shared privately. [Run the demo](docs/demo-runbook.md) in Slack.
+**[Watch the one-minute demo](https://104-156-229-63.sslip.io/static/pengwin-challenge1-59s.mp4)** · **[See the saved agent work](https://104-156-229-63.sslip.io/)** · [View the submission deck](assets/deck/pengwin-agent-arena-submission.pdf)
 
-**Submission:** [Watch the 49-second narrated demo](https://104-156-229-63.sslip.io/static/pengwin-challenge1-final.mp4) and [view the five-slide deck](assets/deck/pengwin-agent-arena-submission.pdf). The video uses the owner's real Slack request and follow-ups.
-
-**See the executed result:** [Vultr sandbox receipt](docs/sandbox-execution-receipt.md). A live model wrote Python for “Calculate 19 plus 23”; the remote container ran it and returned `42`. A separate infinite loop stopped at the ten-second limit, and no ephemeral containers remained. Pengwin is a fictional software and design firm with offices in San Francisco and Berlin; its stores, people, addresses, and transaction examples are demo data.
-
-The control VM holds durable projects, scoped conversation turns, task and audit records, budgets, and approval checks. A second Vultr VM runs disposable browser and code containers without payment, calendar, or Slack credentials. [Talk to the crew](#talk-to-the-crew), [inspect the sandbox receipt](docs/sandbox-execution-receipt.md), or [run locally](#run-locally).
+In the recorded Slack run, one request became a Salesforce Park event proposal, an invitation draft, a sourced estimate for 24 water bottles, and a budget review. Follow-up questions to the individual agents brought back the same saved project after a restart. [Run the Slack walkthrough](docs/demo-runbook.md).
 
 ## Plan an event in Slack
 
-Tell Concierge: **“Plan a Pengwin event at Salesforce Park in about a month, get 24 water bottles, and draft invites for local AI founders.”** Vultr inference proposes a typed plan, and deterministic checks retain only details stated by the requester. Events suggests exact date options, researches venue and reservation leads, and drafts the Eventbrite description and invitation copy. Buyer checks an official Printful water-bottle product range and, when the quantity is known, computes a product-only subtotal estimate. Treasurer records why the goods are needed and compares the estimate with the internal demo allocation. No park reservation, physical order, new Eventbrite page, or invitation is claimed from this planning request.
+Tell Concierge: **“Plan a Pengwin event at Salesforce Park in about a month, get 24 water bottles, and draft invites for local AI founders.”** Concierge creates one project and hands off the work. Events proposes October 27–29, finds the official park inquiry route, and drafts the event description and invitation. Buyer checks Printful's catalog and estimates **$486–$561.84** for 24 bottles. Treasurer checks that estimate against the saved **$1,100 swag allocation** and identifies the exact delivered quote needed for approval. Ask any role a follow-up in the same Slack thread and it recalls the plan.
 
-If the time, capacity, bottle artwork, delivery destination, or audience is missing, the crew asks for it in Slack and keeps its work linked to the same project. A revised request in the same thread supersedes earlier checkout handoffs. The current Printful catalog range is research, not a landed quote: shipping, tax, variant, stock, and artwork still need a reviewed checkout. The personal DoorDash CLI is excluded from this business flow; see the [reuse audit](docs/orderly-doordash-reuse.md).
+If the time, capacity, bottle artwork, delivery destination, or audience is missing, the crew asks for it in Slack and keeps its work linked to the same project. A revised quantity replaces the earlier checkout handoff. The Printful figure is a product estimate; Buyer needs the exact variant, shipping, tax, and artwork for a delivered checkout quote.
+
+## One crew across offices and currencies
+
+The same Slack workflow handles a Berlin pantry request in **EUR** and a San Francisco swag request in **USD**. Each office has its own budget and currency. Buyer gathers the quote; Treasurer checks the office allocation and the matching-currency Airwallex wallet balance before a payment submission. The Airwallex adapter uses that wallet currency as the source for a local payout in the recipient's currency: an EUR order requests an EUR transfer from the EUR wallet. The verified integration read a sandbox wallet balance and submitted a **EUR 19.20** Berlin transfer, which Airwallex reported as **PROCESSING**. See the [Airwallex receipt](docs/airwallex-sandbox-receipt.md).
+
+This gives a distributed team one place to request supplies, review spend, and revisit the reason for an order. The deployed Slack crew currently records checkouts in simulated-payment mode; the separately approved Airwallex sandbox transfer demonstrates the provider handoff. Pengwin's offices, stores, and transaction examples are fictional demo data.
+
+## What powers each handoff
+
+| Service | Job in Pengwin |
+| --- | --- |
+| **Slack** | The home for requests, agent replies, approvals, and follow-up questions. |
+| **Vultr Inference** | DeepSeek V4.1 Flash interprets requests and proposes agent tasks; policy checks decide what can run. |
+| **Vultr Cloud Compute** | Hosts the crew and a separate disposable sandbox for browser and code execution. |
+| **Postgres** | Saves project facts, conversation context, job results, budgets, and audit records across restarts. |
+| **Eventbrite API** | Creates an approved public RSVP page and reads back its status through the Events worker. |
+| **Printful catalog** | Supplies publisher-listed water-bottle products and prices for Buyer to source. |
+| **Airwallex sandbox API** | Reads currency wallet balances and accepts policy-reviewed test transfers through Treasurer. |
+
+For [Challenge 1](https://104-156-229-63.sslip.io/sandbox), Vultr inference also wrote a Python calculation. A disposable, networkless container returned `42`, contained an infinite loop at ten seconds, and cleaned up afterward. [Inspect the execution receipt](docs/sandbox-execution-receipt.md).
 
 Events can also answer “What events do we currently have live?” and a same-thread “on Oct 2nd.” It reads saved Pengwin publications and checks current status through the credential-holding Events worker. If Eventbrite cannot be reached, it says the page was published by Pengwin and that the current status was not checked. The lookup never publishes or emails anything.
 
