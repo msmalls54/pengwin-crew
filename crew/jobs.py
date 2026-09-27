@@ -1,8 +1,8 @@
 """Durable, role-routed office workflows.
 
-Only queued jobs are claimable. A claimed job is never retried automatically:
-after a crash it must be inspected before a person decides whether it is safe
-to resume. This is especially important around payment submission.
+Only queued jobs are claimable. A stale claim may be retried once only for
+read-only work whose durable facts have stable resource keys. All other stale
+claims are held for reconciliation, especially provider writes and payments.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -82,6 +83,22 @@ ROLE_KINDS = {
     "Treasurer": {"pay", "budget_review"},
 }
 UNCERTAIN_PAYMENT_STATUSES = {"PENDING_PROVIDER", "PROVIDER_OUTCOME_UNKNOWN"}
+
+# These handlers make provider GETs and/or bounded Brave searches, then upsert
+# facts under a unique (run, resource kind, resource id) key. They create no
+# successor jobs, approvals, orders, invitations, or payments. Brave attempts
+# remain counted by its atomic search-budget reservation on every retry.
+RETRYABLE_READ_ONLY_KINDS = {
+    ("Events", "event_research"),
+    ("Events", "eventbrite_status"),
+    ("Buyer", "product_source"),
+    ("Treasurer", "budget_review"),
+}
+STALE_JOB_AFTER = timedelta(minutes=15)
+RECOVERY_SWEEP_INTERVAL_SECONDS = 30.0
+RECOVERY_SWEEP_LIMIT = 20
+MAX_READ_ONLY_CLAIMS = 2  # Initial claim plus one bounded recovery retry.
+_last_recovery_sweep: dict[str, float] = {}
 
 
 def _new_job(session: Session, *, run_id: str, role: str, kind: str, input_data: dict) -> AgentJob:
@@ -348,6 +365,87 @@ def claim_next_job(role: str) -> str | None:
             if claimed.rowcount == 1:
                 return job_id
     return None
+
+
+def recover_stale_jobs(role: str, *, now: datetime | None = None,
+                       stale_after: timedelta = STALE_JOB_AFTER,
+                       limit: int = RECOVERY_SWEEP_LIMIT) -> dict[str, int]:
+    """Recover a bounded set of interrupted claims for one worker role.
+
+    A retry is limited to a single attempt on read-only research/status work.
+    Every other kind is held: a crashed worker may already have made an
+    outside write even if it never committed its final job result. This runs
+    at worker startup and periodically through ``run_one_job``.
+    """
+    if role not in ROLE_KINDS:
+        raise ValueError("Unknown crew role")
+    if stale_after <= timedelta(0) or not 1 <= limit <= RECOVERY_SWEEP_LIMIT:
+        raise ValueError("Invalid recovery window or batch size")
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - stale_after
+    counts = {"requeued": 0, "held": 0}
+    held_runs: set[str] = set()
+    with SessionLocal.begin() as session:
+        candidates = session.execute(select(
+            AgentJob.id, AgentJob.run_id, AgentJob.kind, AgentJob.attempts,
+        ).where(
+            AgentJob.role == role, AgentJob.status == "RUNNING",
+            AgentJob.updated_at <= cutoff,
+        ).order_by(AgentJob.updated_at, AgentJob.id).limit(limit)).all()
+        for job_id, run_id, kind, attempts in candidates:
+            # Both recovery and worker completion take the job row first,
+            # then any run/queued-job rows. No run-first lock inversion.
+            claim_match = (
+                AgentJob.id == job_id,
+                AgentJob.role == role,
+                AgentJob.status == "RUNNING",
+                AgentJob.attempts == attempts,
+                AgentJob.updated_at <= cutoff,
+            )
+            retryable = (role, kind) in RETRYABLE_READ_ONLY_KINDS and attempts == 1
+            if retryable:
+                retried = session.execute(update(AgentJob).where(
+                    *claim_match,
+                    AgentJob.run_id.in_(select(CrewRun.id).where(
+                        CrewRun.status.in_(("QUEUED", "RUNNING")),
+                    )),
+                ).values(status="QUEUED", error=None, updated_at=now))
+                if retried.rowcount == 1:
+                    counts["requeued"] += 1
+                    record(session, agent=role, action="agent_job_requeued_after_interruption",
+                           request_id=run_id, detail={"job_id": job_id, "kind": kind,
+                                                      "next_claim": attempts + 1}, severity="warning")
+                    continue
+            reason = (
+                "Interrupted job reached its read-only retry limit; review required"
+                if (role, kind) in RETRYABLE_READ_ONLY_KINDS and attempts >= MAX_READ_ONLY_CLAIMS
+                else "Interrupted job outcome requires reconciliation before retry"
+            )
+            changed = session.execute(update(AgentJob).where(
+                *claim_match,
+            ).values(status="HELD", error=reason, updated_at=now))
+            if changed.rowcount != 1:
+                continue
+            counts["held"] += 1
+            _stop_run(session, run_id, status="HELD")
+            held_runs.add(run_id)
+            record(session, agent=role, action="agent_job_held_after_interruption",
+                   request_id=run_id, detail={"job_id": job_id, "kind": kind,
+                                              "attempts": attempts}, severity="warning")
+    for run_id in held_runs:
+        _notify(run_id, role, "This request stopped unexpectedly. "
+                "I've held it for review before any step is retried.")
+    return counts
+
+
+def _maybe_recover_stale_jobs(role: str) -> None:
+    tick = time.monotonic()
+    if tick - _last_recovery_sweep.get(role, float("-inf")) < RECOVERY_SWEEP_INTERVAL_SECONDS:
+        return
+    # The first call after process startup sweeps immediately. A failed sweep
+    # stays eligible on the next pass instead of silently disabling recovery.
+    recover_stale_jobs(role)
+    _last_recovery_sweep[role] = tick
 
 
 def _refresh_run(session: Session, run_id: str) -> None:
@@ -997,6 +1095,7 @@ def _notify(run_id: str, role: str, message: str) -> None:
                    detail={"error_type": type(exc).__name__}, severity="error")
 def run_one_job(role: str) -> bool:
     """Process one queued job for this role. Returns False when no job is ready."""
+    _maybe_recover_stale_jobs(role)
     job_id = claim_next_job(role)
     if job_id is None:
         return False
@@ -1004,18 +1103,24 @@ def run_one_job(role: str) -> bool:
         job = session.get(AgentJob, job_id)
         run = session.get(CrewRun, job.run_id)
         run_id = run.id
+        claimed_attempts = job.attempts
         # Detach only the immutable fields needed by the role handler.
         session.expunge(job)
         session.expunge(run)
     try:
         output, successors, message, hold = _perform(job, run)
         with SessionLocal.begin() as session:
-            persisted = session.get(AgentJob, job_id)
-            if persisted.status != "RUNNING":
+            finished = session.execute(update(AgentJob).where(
+                AgentJob.id == job_id, AgentJob.status == "RUNNING",
+                AgentJob.attempts == claimed_attempts,
+                AgentJob.run_id.in_(select(CrewRun.id).where(
+                    CrewRun.status.in_(("QUEUED", "RUNNING")),
+                )),
+            ).values(output_json=json.dumps(output, sort_keys=True),
+                     status="HELD" if hold else "DONE",
+                     updated_at=datetime.now(timezone.utc)))
+            if finished.rowcount != 1:
                 raise RuntimeError("Claimed job state changed")
-            persisted.output_json = json.dumps(output, sort_keys=True)
-            persisted.status = "HELD" if hold else "DONE"
-            persisted.updated_at = datetime.now(timezone.utc)
             if hold:
                 _stop_run(session, run_id, status="HELD")
             else:
@@ -1030,18 +1135,25 @@ def run_one_job(role: str) -> bool:
                                               "next_jobs": len(successors)}, severity="warning" if hold else "info")
         _notify(run_id, role, message)
     except Exception as exc:
+        stopped_this_claim = False
         with SessionLocal.begin() as session:
-            persisted = session.get(AgentJob, job_id)
-            if persisted and persisted.status == "RUNNING":
-                provider_mutation = role == "Treasurer" or persisted.kind in {
-                    "luma_publish", "eventbrite_publish",
-                }
-                persisted.status = "HELD" if provider_mutation else "FAILED"
-                persisted.error = type(exc).__name__
-                persisted.updated_at = datetime.now(timezone.utc)
+            run_status = session.execute(select(CrewRun.status).where(
+                CrewRun.id == run_id,
+            )).scalar_one_or_none()
+            provider_mutation = (run_status not in {"QUEUED", "RUNNING"}
+                                 or role == "Treasurer"
+                                 or job.kind in {"luma_publish", "eventbrite_publish"})
+            failed = session.execute(update(AgentJob).where(
+                AgentJob.id == job_id, AgentJob.status == "RUNNING",
+                AgentJob.attempts == claimed_attempts,
+            ).values(status="HELD" if provider_mutation else "FAILED",
+                     error=type(exc).__name__, updated_at=datetime.now(timezone.utc)))
+            if failed.rowcount == 1:
                 _stop_run(session, run_id, status="HELD" if provider_mutation else "FAILED")
                 record(session, agent=role, action="agent_job_failed", request_id=run_id,
                        detail={"job_id": job_id, "kind": job.kind,
                                "error_type": type(exc).__name__}, severity="error")
-        _notify(run_id, role, "I hit a problem and stopped safely. Please check this request before trying again.")
+                stopped_this_claim = True
+        if stopped_this_claim:
+            _notify(run_id, role, "I hit a problem and stopped safely. Please check this request before trying again.")
     return True

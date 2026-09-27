@@ -72,6 +72,8 @@ The container receives no Vultr, Slack, Airwallex, Eventbrite, Luma, or Printful
 
 Each role claims only its assigned job kinds from the durable queue. Treasurer is the only worker given Airwallex credentials when sandbox mode is enabled; Buyer and Events get the remote Docker key. The workers currently share one database login, so application role checks and credential separation do not amount to database-enforced isolation.
 
+A worker sweep handles claims interrupted for more than 15 minutes. Read-only research and status work may retry once; steps that could dispatch, execute code, buy, publish, or pay are held for review. A late worker cannot overwrite a newer claim. If a Slack intake claim is left pending and Slack never redelivers, the user must resend the request; the stored conversation turn is redacted and cannot safely recreate it.
+
 ## Run locally
 
 Python 3.12 or later is recommended.

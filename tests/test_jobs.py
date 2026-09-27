@@ -220,3 +220,187 @@ try:
 except ValueError as exc:
     assert "simulated payment mode" in str(exc)
 """)
+
+
+def test_stale_read_only_job_retries_once_then_holds_without_resetting_caps(tmp_path):
+    _run_script(tmp_path, "queue-recover-research.db", """
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import select
+from crew.db import AgentJob, ControlFlag, SessionLocal
+from crew.seed import seed_demo
+import crew.jobs as jobs
+
+seed_demo(reset=True)
+messages = []
+jobs._notify = lambda run_id, role, message: messages.append((run_id, role, message))
+run_id = jobs.submit_run('event-status', source_user='U_TEST', channel_id='C_DEMO',
+                         request_text='What events are live?')
+assert jobs.run_one_job('Concierge')  # Dispatches a read-only Events lookup.
+messages.clear()
+job_id = jobs.claim_next_job('Events')
+assert job_id
+old = datetime.now(timezone.utc) - timedelta(minutes=20)
+with SessionLocal.begin() as session:
+    session.get(AgentJob, job_id).updated_at = old
+    session.get(ControlFlag, 'brave_searches').value = '17'
+    session.get(ControlFlag, 'vultr_calls').value = '9'
+
+assert jobs.recover_stale_jobs('Events') == {'requeued': 1, 'held': 0}
+first = jobs.get_run(run_id)
+assert first['status'] == 'RUNNING'
+assert first['jobs'][-1]['status'] == 'QUEUED'
+assert first['jobs'][-1]['attempts'] == 1
+assert jobs.claim_next_job('Events') == job_id
+with SessionLocal.begin() as session:
+    session.get(AgentJob, job_id).updated_at = old
+assert jobs.recover_stale_jobs('Events') == {'requeued': 0, 'held': 1}
+final = jobs.get_run(run_id)
+assert final['status'] == 'HELD'
+assert final['jobs'][-1]['status'] == 'HELD'
+assert final['jobs'][-1]['attempts'] == 2
+assert 'retry limit' in final['jobs'][-1]['error']
+assert jobs.claim_next_job('Events') is None
+assert len(messages) == 1 and messages[0][0] == run_id
+with SessionLocal() as session:
+    assert session.get(ControlFlag, 'brave_searches').value == '17'
+    assert session.get(ControlFlag, 'vultr_calls').value == '9'
+""")
+
+
+def test_stale_dispatch_is_held_on_worker_sweep_and_preserves_delivery(tmp_path):
+    _run_script(tmp_path, "queue-recover-dispatch.db", """
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import select
+from crew.db import AgentJob, SessionLocal, SlackDelivery
+from crew.seed import seed_demo
+from crew.slack_bot import run_status_text
+import crew.jobs as jobs
+
+seed_demo(reset=True)
+messages = []
+jobs._notify = lambda run_id, role, message: messages.append(message)
+run_id = jobs.submit_run('project-plan', source_user='U_TEST', channel_id='C_DEMO',
+                         request_text='Plan an event at Salesforce Park next month')
+job_id = jobs.claim_next_job('Concierge')
+assert job_id
+with SessionLocal.begin() as session:
+    session.get(AgentJob, job_id).updated_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+    session.add(SlackDelivery(delivery_hash='d' * 64, role='Concierge', channel_id='C_DEMO',
+                              source_user='U_TEST', state='DONE', run_id=run_id))
+
+# The normal worker loop checks stale claims before looking for queued jobs.
+jobs._last_recovery_sweep.clear()
+assert not jobs.run_one_job('Concierge')
+run = jobs.get_run(run_id)
+assert run['status'] == 'HELD'
+assert run['jobs'][0]['status'] == 'HELD'
+assert run['jobs'][0]['attempts'] == 1
+assert len(run['jobs']) == 1  # No duplicate dispatch or provider action.
+assert messages and 'held it for review' in messages[0]
+with SessionLocal() as session:
+    delivery = session.get(SlackDelivery, 'd' * 64)
+    assert (delivery.state, delivery.run_id) == ('DONE', run_id)
+assert 'No run is available' in run_status_text(run_id, user_id='U_OTHER')
+""")
+
+
+def test_stale_payment_claim_holds_run_without_provider_retry(tmp_path):
+    _run_script(tmp_path, "queue-recover-payment.db", """
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
+from crew.db import AgentJob, CrewRun, Payment, SessionLocal
+from crew.seed import seed_demo
+from sqlalchemy import select
+import crew.jobs as jobs
+
+seed_demo(reset=True)
+jobs._notify = lambda *args: None
+run_id, job_id = str(uuid4()), str(uuid4())
+with SessionLocal.begin() as session:
+    session.add(CrewRun(id=run_id, flow='berlin-pantry', source_user='U_TEST',
+                        channel_id='C_DEMO', status='RUNNING'))
+    session.flush()
+    session.add(AgentJob(id=job_id, run_id=run_id, role='Treasurer', kind='pay',
+                         input_json='{}', status='QUEUED'))
+assert jobs.claim_next_job('Treasurer') == job_id
+with SessionLocal.begin() as session:
+    session.get(AgentJob, job_id).updated_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+assert jobs.recover_stale_jobs('Treasurer') == {'requeued': 0, 'held': 1}
+run = jobs.get_run(run_id)
+assert run['status'] == 'HELD'
+assert run['jobs'][0]['status'] == 'HELD'
+assert 'reconciliation' in run['jobs'][0]['error']
+assert jobs.claim_next_job('Treasurer') is None
+with SessionLocal() as session:
+    assert session.execute(select(Payment)).scalars().all() == []
+""")
+
+
+def test_old_read_only_attempt_cannot_finish_new_claim(tmp_path):
+    _run_script(tmp_path, "queue-recover-fence.db", """
+from datetime import datetime, timedelta, timezone
+from crew.db import AgentJob, SessionLocal
+from crew.seed import seed_demo
+import crew.jobs as jobs
+
+seed_demo(reset=True)
+messages = []
+jobs._notify = lambda run_id, role, message: messages.append(message)
+run_id = jobs.submit_run('event-status', source_user='U_TEST', channel_id='C_DEMO',
+                         request_text='What events are live?')
+assert jobs.run_one_job('Concierge')
+messages.clear()
+
+def interrupted_perform(job, run):
+    old = datetime.now(timezone.utc) - timedelta(minutes=20)
+    with SessionLocal.begin() as session:
+        session.get(AgentJob, job.id).updated_at = old
+    assert jobs.recover_stale_jobs('Events') == {'requeued': 1, 'held': 0}
+    assert jobs.claim_next_job('Events') == job.id
+    return {'count': 0}, [], 'Old worker finished too late', False
+
+jobs._perform = interrupted_perform
+assert jobs.run_one_job('Events')
+run = jobs.get_run(run_id)
+assert run['status'] == 'RUNNING'
+assert run['jobs'][-1]['status'] == 'RUNNING'
+assert run['jobs'][-1]['attempts'] == 2
+assert messages == []  # A superseded worker cannot announce completion/failure.
+""")
+
+
+def test_peer_worker_cannot_record_success_after_run_is_held(tmp_path):
+    _run_script(tmp_path, "queue-recover-peer.db", """
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
+from crew.db import AgentJob, CrewRun, SessionLocal
+from crew.seed import seed_demo
+import crew.jobs as jobs
+
+seed_demo(reset=True)
+messages = []
+jobs._notify = lambda run_id, role, message: messages.append((role, message))
+run_id, pay_id, events_id = str(uuid4()), str(uuid4()), str(uuid4())
+with SessionLocal.begin() as session:
+    session.add(CrewRun(id=run_id, flow='welcome-kit', source_user='U_TEST',
+                        channel_id='C_DEMO', status='RUNNING'))
+    session.flush()
+    session.add(AgentJob(id=pay_id, run_id=run_id, role='Treasurer', kind='pay',
+                         input_json='{}', status='QUEUED'))
+    session.add(AgentJob(id=events_id, run_id=run_id, role='Events',
+                         kind='lunch_complete', input_json='{}', status='QUEUED'))
+assert jobs.claim_next_job('Treasurer') == pay_id
+assert jobs.claim_next_job('Events') == events_id
+with SessionLocal.begin() as session:
+    session.get(AgentJob, pay_id).updated_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+assert jobs.recover_stale_jobs('Treasurer') == {'requeued': 0, 'held': 1}
+
+# Simulate the already-claimed Events worker returning after the run was held.
+jobs.claim_next_job = lambda role: events_id
+jobs._perform = lambda job, run: ({'result': 'late'}, [], 'Late result', False)
+assert jobs.run_one_job('Events')
+run = jobs.get_run(run_id)
+assert run['status'] == 'HELD'
+assert [job['status'] for job in run['jobs']] == ['HELD', 'HELD']
+assert not any(message == 'Late result' for _, message in messages)
+""")
