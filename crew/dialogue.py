@@ -11,6 +11,9 @@ from sqlalchemy import func, select
 
 from .db import Payment, SessionLocal
 from .inference import VultrInference
+from .project_planner import (SourcingProposal, generic_sourcing_proposal,
+                              is_multi_part_project_request, user_request_source)
+from .research import ResearchResult, lookup_project_facts
 from .slack_bot import (FLOW_COMMANDS, latest_run_status_text, queue_allowed_flow,
                         run_status_text, status_text)
 
@@ -75,8 +78,107 @@ def _looks_like_event_request(text: str) -> bool:
                 re.search(r"\b(event|lunch|meeting|party|gathering|invite)\b", text, re.I))
 
 
+def _looks_like_event_status(text: str, context: str = "") -> bool:
+    """Route live-event questions and short date follow-ups to a facts worker."""
+    status_words = re.compile(
+        r"\b(live|published|upcoming|current|currently|status|rsvp|link|listed|created)\b", re.I
+    )
+    event_words = re.compile(r"\b(events?|eventbrite|rsvp pages?)\b", re.I)
+    if event_words.search(text) and status_words.search(text):
+        return True
+    if not re.fullmatch(
+        r"(?:on |the one on |for )?"
+        r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+        r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+        r"\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?[?.! ]*",
+        text.strip(), re.I,
+    ):
+        return False
+    try:
+        prior_user_words = user_request_source("follow-up", context)
+    except ValueError:
+        return False
+    return bool(event_words.search(prior_user_words) and status_words.search(prior_user_words))
+
+
+def _safe_product_query(text: str) -> str | None:
+    """Map broad product terms to generic queries without sending raw Slack text."""
+    products = (
+        (r"\bwater\s+bottles?\b|\bdrinkware\b", "custom water bottles business suppliers"),
+        (r"\bchairs?\b", "office chairs business suppliers"),
+        (r"\bdesks?\b", "office desks business suppliers"),
+        (r"\bmonitors?\b", "office monitors business suppliers"),
+        (r"\bkeyboards?\b", "office keyboards business suppliers"),
+        (r"\blaptops?\b", "business laptops suppliers"),
+        (r"\bprinters?\b", "office printers business suppliers"),
+        (r"\b(?:espresso|coffee) machines?\b", "office coffee machines business suppliers"),
+        (r"\bmugs?\b", "custom mugs business suppliers"),
+        (r"\bnotebooks?\b", "office notebooks business suppliers"),
+    )
+    for pattern, query in products:
+        if re.search(pattern, text, re.I):
+            return query
+    return None
+
+
+def _external_research_query(text: str) -> tuple[str, str] | None:
+    if re.search(r"\b(approve|publish|pay|transfer|refund|reimburse|charge)\b", text, re.I):
+        return None
+    if not ("?" in text or re.search(
+        r"\b(find|search|look up|research|compare|current|latest|price|cost|available)\b",
+        text, re.I,
+    )):
+        return None
+    product_query = _safe_product_query(text)
+    if product_query:
+        return product_query, "web"
+    if re.search(r"\bsalesforce\s+park\b", text, re.I):
+        return "Salesforce Park San Francisco event reservation official", "web"
+    if re.search(r"\b(venue|meeting space|event space|restaurant|park)\b", text, re.I):
+        city = " San Francisco" if re.search(r"\b(San Francisco|SF)\b", text, re.I) else (
+            " Berlin" if re.search(r"\bBerlin\b", text, re.I) else ""
+        )
+        return f"event venues{city}", "place"
+    if re.search(r"\beventbrite\b", text, re.I):
+        return "Eventbrite event registration official help", "web"
+    return None
+
+
+def _search_context(result: ResearchResult) -> str:
+    if result.status != "ok":
+        return "Live search unavailable; current external facts remain unverified."
+    if not result.results:
+        return "Live search returned no leads; current external facts remain unverified."
+    lines = ["Unverified search leads; not checked with the publisher:"]
+    for lead in result.results[:2]:
+        lines.append(f"{lead.title}: {lead.snippet[:150]} {lead.url or ''}".strip())
+    return "\n".join(lines)[:1500]
+
+
+def _sourcing_reply(proposal: SourcingProposal) -> str:
+    """Do research for unsupported goods without entering a mock checkout."""
+    lead = (f"I can source options for {proposal.quantity} {proposal.product_phrase}. "
+            "I have not placed an order or obtained a checkout quote.")
+    query = _safe_product_query(proposal.product_phrase)
+    if query:
+        result = lookup_project_facts(query, kind="web", max_results=2)
+        if result.status == "ok" and result.results:
+            choices = [f"{item.title} ({item.url})" for item in result.results if item.url]
+            if choices:
+                lead += " Possible suppliers to check: " + "; ".join(choices[:2]) + "."
+            else:
+                lead += " The search returned no usable supplier links."
+        else:
+            lead += " Live supplier search is unavailable."
+    else:
+        lead += " I need the product type or specifications before a useful supplier search."
+    return (lead + " A real purchase needs a business checkout path, delivery details, "
+            "a current total, and your approval.")[:1800]
+
+
 def answer(role: str, text: str, *, user_id: str, channel_id: str,
-           delivery_id: str, thread_ts: str | None = None) -> str:
+           delivery_id: str, thread_ts: str | None = None,
+           context: str = "") -> str:
     """Only established workflows may mutate outside Slack; chat itself is read-only."""
     if role not in {"Concierge", "Buyer", "Events", "Treasurer"}:
         raise ValueError("Unknown crew role")
@@ -109,6 +211,9 @@ def answer(role: str, text: str, *, user_id: str, channel_id: str,
                     "Ask Concierge to set up a supported request for review. Real payments are not enabled here.")
     if lower.startswith("run "):
         return run_status_text(text[4:].strip(), user_id=user_id)
+    if role in {"Concierge", "Events"} and _looks_like_event_status(text, context):
+        return queue_allowed_flow("event-status", user_id=user_id, channel_id=channel_id,
+                                  delivery_id=delivery_id, request_text=text, context=context)
     if re.search(r"\b(status|progress|update|happened|going)\b", lower) and re.search(
         r"\b(my|last|order|event|request|task)\b", lower
     ):
@@ -121,6 +226,13 @@ def answer(role: str, text: str, *, user_id: str, channel_id: str,
             return status_text(budgets=False)
         if lower in {"budgets", "budget"}:
             return status_text(budgets=True)
+    if role in {"Concierge", "Events"} and is_multi_part_project_request(text, context):
+        return queue_allowed_flow("project-plan", user_id=user_id, channel_id=channel_id,
+                                  delivery_id=delivery_id, request_text=text, context=context)
+    if role in {"Concierge", "Buyer"}:
+        sourcing = generic_sourcing_proposal(text)
+        if sourcing:
+            return _sourcing_reply(sourcing)
     if role in {"Concierge", "Buyer"} and _looks_like_purchase(text):
         return queue_allowed_flow("natural-language", user_id=user_id, channel_id=channel_id,
                                   delivery_id=delivery_id, request_text=text)
@@ -134,8 +246,19 @@ def answer(role: str, text: str, *, user_id: str, channel_id: str,
     facts = ""
     if role == "Treasurer":
         facts = spend_report("today") + "\n" + status_text(budgets=True)
+    search_result = None
+    research_context = ""
+    lookup = _external_research_query(text)
+    if lookup:
+        query, kind = lookup
+        search_result = lookup_project_facts(query, kind=kind, max_results=2)
+        research_context = _search_context(search_result)
     try:
-        return VultrInference().role_reply(role=role, request_text=text, facts=facts)
+        reply = VultrInference().role_reply(role=role, request_text=text, facts=facts,
+                                            context=context, research_context=research_context)
+        if search_result and search_result.status != "ok" and "live search" not in reply.casefold():
+            reply += " Live search is unavailable, so current external details remain unverified."
+        return reply[:1500]
     except Exception:
         # A model outage should not pretend a task or factual answer succeeded.
         return ("I can't think through that request right now. Try again in a moment, "

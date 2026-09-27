@@ -132,3 +132,21 @@ class EventbriteClient:
         }:
             raise RuntimeError("Eventbrite publication could not be verified; reconcile before retrying")
         return url
+
+    def read_status(self, event_id: str) -> dict:
+        """Read current provider state; this never creates or changes an event."""
+        if not isinstance(event_id, str) or not event_id.isdecimal():
+            raise ValueError("Invalid Eventbrite event ID")
+        event = self._request("GET", f"/events/{event_id}/")
+        status = event.get("status")
+        url = event.get("url")
+        parsed = urlparse(url) if isinstance(url, str) else None
+        safe_url = url if parsed and parsed.scheme == "https" and parsed.hostname in {
+            "www.eventbrite.com", "eventbrite.com",
+        } else None
+        return {
+            "id": event_id,
+            "status": status if status in {"live", "draft", "ended", "canceled", "started"} else "unknown",
+            "url": safe_url,
+            "listed": event.get("listed") if isinstance(event.get("listed"), bool) else None,
+        }

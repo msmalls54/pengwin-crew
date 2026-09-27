@@ -15,6 +15,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from .audit import record
 from .config import settings
 from .db import Budget, ControlFlag, CrewRun, SessionLocal
+from . import memory
 from .seed import seed_demo
 HELP = ("Tell Concierge or Events what you need in ordinary English. For an event, include the "
         "name, date, start and end time, time zone, online link, and number of free spots. "
@@ -43,13 +44,13 @@ def is_demo_channel(channel_id: str) -> bool:
 
 
 def _submit_run(flow: str, *, source_user: str, channel_id: str,
-                request_text: str | None = None) -> str:
-    from .jobs import submit_run
-
-    if request_text is None:
-        return submit_run(flow, source_user=source_user, channel_id=channel_id)
-    return submit_run(flow, source_user=source_user, channel_id=channel_id,
-                      request_text=request_text)
+                delivery_id: str, request_text: str | None = None,
+                reply_text: str | None = None, context: str = "",
+                thread_root_ts: str | None = None) -> memory.EnqueuedRun:
+    return memory.enqueue_delivery_run(flow=flow, user_id=source_user,
+                                       channel_id=channel_id, delivery_id=delivery_id,
+                                       request_text=request_text, reply_text=reply_text,
+                                       context=context, thread_root_ts=thread_root_ts)
 
 
 def claim_delivery(delivery_id: str) -> bool:
@@ -67,27 +68,37 @@ def claim_delivery(delivery_id: str) -> bool:
 
 
 def queue_allowed_flow(flow: str, *, user_id: str, channel_id: str,
-                       delivery_id: str, request_text: str | None = None) -> str:
+                       delivery_id: str, request_text: str | None = None,
+                       context: str = "", thread_root_ts: str | None = None) -> str:
     if not is_slack_allowed(user_id):
         return "This Slack user is not allowed to run crew requests."
     if not is_demo_channel(channel_id):
         return "Crew requests are accepted only in the configured demo channel."
-    if flow in {"natural-language", "luma-event", "eventbrite-event", "code-task"} and (not request_text or len(request_text) > 1000):
+    if flow in {"natural-language", "luma-event", "eventbrite-event", "code-task", "project-plan", "event-status"} and (not request_text or len(request_text) > 1000):
         return "Please include a request of at most 1,000 characters."
-    if not claim_delivery(delivery_id):
+    if not delivery_id:
         return "This Slack request was already received, or has no delivery ID. Send a new request if needed."
+    if flow in {"eventbrite-event", "luma-event"}:
+        lead = "On it. I'll draft the event and show you the details before anything goes live."
+    elif flow == "code-task":
+        lead = "On it. Buyer will run this in an isolated workspace and bring back the result."
+    elif flow == "project-plan":
+        lead = "On it. I'll map the request for the crew and show what needs your approval."
+    elif flow == "event-status":
+        lead = "On it. Events will check the saved RSVP pages and their current status."
+    else:
+        lead = "On it. I'll bring the right teammates into this thread and keep you posted."
     try:
-        _submit_run(flow, source_user=user_id, channel_id=channel_id,
-                    request_text=request_text)
-        if flow in {"eventbrite-event", "luma-event"}:
-            lead = "On it. I'll draft the event and show you the details before anything goes live."
-        elif flow == "code-task":
-            lead = "On it. Buyer will run this in an isolated workspace and bring back the result."
-        else:
-            lead = "On it. I'll bring the right teammates into this thread and keep you posted."
+        queued = _submit_run(flow, source_user=user_id, channel_id=channel_id,
+                             delivery_id=delivery_id, request_text=request_text,
+                             reply_text=lead, context=context,
+                             thread_root_ts=thread_root_ts or memory.active_thread_root())
+        if queued.duplicate:
+            return queued.cached_reply or "This Slack request was already received. Check its thread for progress."
         return lead
     except Exception:
-        # Preserve the claim: a retry must not create a second purchase-capable job.
+        # The claim and run queue share one transaction. A previously recorded
+        # inbound PENDING turn remains recoverable if that transaction fails.
         with SessionLocal.begin() as session:
             record(session, agent="Concierge", action="slack_queue_failed",
                    detail={"flow": flow, "delivery_key": hashlib.sha256(delivery_id.encode()).hexdigest()},
@@ -286,14 +297,41 @@ def build_app() -> App:
             say("This Slack user is not allowed to run crew requests.")
             return
         text = re.sub(r"<@[^>]+>", "", event.get("text", "")).strip()
-        from .dialogue import answer
-        reply = answer("Concierge", text, user_id=user_id, channel_id=channel_id,
-                       delivery_id=("event:" + body["event_id"]) if body.get("event_id") else "",
-                       thread_ts=event.get("thread_ts"))
+        thread_root_ts = event.get("thread_ts") or event.get("ts")
+        delivery_id = ("event:" + body["event_id"] if body.get("event_id") else
+                       f"message:{channel_id}:{event.get('ts', '')}")
+        claim = memory.record_inbound(role="Concierge", user_id=user_id, channel_id=channel_id,
+                                      delivery_id=delivery_id, text=text,
+                                      message_ts=event.get("ts"),
+                                      thread_root_ts=thread_root_ts)
+        if not claim.accepted:
+            return
+        context = memory.format_recent_turns(memory.recent_turns(
+            role="Concierge", user_id=user_id, channel_id=channel_id,
+            thread_root_ts=thread_root_ts, exclude_delivery_id=delivery_id))
+        if claim.cached_reply:
+            reply = claim.cached_reply
+        else:
+            from .dialogue import answer
+            thread_token = memory.set_active_thread_root(thread_root_ts)
+            try:
+                reply = answer("Concierge", text, user_id=user_id, channel_id=channel_id,
+                               delivery_id=delivery_id, thread_ts=event.get("thread_ts"),
+                               context=context)
+            finally:
+                memory.reset_active_thread_root(thread_token)
+        memory.cache_reply(delivery_id=delivery_id, user_id=user_id,
+                           channel_id=channel_id, reply=reply)
         options = {"text": reply}
-        if event.get("thread_ts"):
-            options["thread_ts"] = event["thread_ts"]
-        say(**options)
+        if thread_root_ts:
+            options["thread_ts"] = thread_root_ts
+        sent = say(**options)
+        posted_ts = sent.get("ts") if sent is not None else None
+        if posted_ts:
+            memory.record_outbound(role="Concierge", user_id=user_id, channel_id=channel_id,
+                                   delivery_id=delivery_id, reply=reply,
+                                   message_ts=str(posted_ts),
+                                   thread_root_ts=thread_root_ts)
 
     @bot.command("/crew")
     def command(ack, client, command):

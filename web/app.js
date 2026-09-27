@@ -5,6 +5,18 @@ let activeCodeRun = '';
 const $ = id => document.getElementById(id);
 const money = (cents, currency) => new Intl.NumberFormat('en-US', {style:'currency',currency}).format(cents / 100);
 const authHeaders = () => ({'Authorization':`Bearer ${adminToken}`});
+const readableTime = value => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Time unavailable' : new Intl.DateTimeFormat('en-US', {
+    month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'
+  }).format(date);
+};
+const statusWords = {
+  QUEUED:'Requested',RUNNING:'In progress',WAITING_APPROVAL:'Awaiting human approval',
+  COMPLETE:'Completed',DONE:'Completed',FAILED:'Failed',HELD:'Held for review',REJECTED:'Rejected',
+  queued:'Requested',complete:'Recorded',proposed:'Proposed',approved:'Approved',blocked:'Blocked',
+  reserved:'Reserved',submitted:'Submitted',simulated:'Simulated',contained:'Contained',failed:'Failed',held:'Held for review'
+};
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -50,6 +62,68 @@ function render(state) {
   }));
 }
 
+function renderJudge(data) {
+  $('activity-connection').textContent=`● Read only · updated ${readableTime(data.as_of)}`;
+  const events=data.activity||[];
+  $('judge-timeline').classList.toggle('empty-view',events.length===0);
+  $('judge-timeline').replaceChildren(...(events.length ? events.map(event=>{
+    const item=node('article',`judge-event ${event.status}`);
+    const top=node('div','judge-event-top');
+    const timestamp=node('time','',readableTime(event.ts)); timestamp.dateTime=event.ts;
+    top.append(node('strong','',event.role),timestamp);
+    const line=node('div','judge-event-title');
+    line.append(node('span','',event.title),node('span',`proof-status ${event.status}`,statusWords[event.status]||'Recorded'));
+    item.append(top,line,node('p','judge-proof',event.evidence));
+    return item;
+  }) : [node('p','','No recorded activity is available yet.')]));
+
+  const runs=data.runs||[];
+  $('judge-runs').classList.toggle('empty-view',runs.length===0);
+  $('judge-runs').replaceChildren(...(runs.length ? runs.map(run=>{
+    const item=node('article','judge-run');
+    const head=node('div','judge-run-head');
+    head.append(node('strong','',run.flow),node('span',`proof-status ${run.status.toLowerCase()}`,statusWords[run.status]||'Recorded'));
+    item.append(head,node('time','',readableTime(run.created_at)));
+    const steps=node('div','judge-steps');
+    (run.steps||[]).forEach(step=>steps.append(node('span','judge-step',`${step.role}: ${step.task} · ${statusWords[step.status]||'Recorded'}`)));
+    item.append(steps);
+    return item;
+  }) : [node('p','','No recent tasks are recorded.')]));
+
+  const groups=[
+    ['Proposed mock orders',data.spend?.proposed_mock_orders||[],'Quoted from fictional stores. This is not spending.'],
+    ['Simulated checkouts',data.spend?.simulated_checkouts||[],'Recorded locally; no real charge.'],
+    ['Sandbox transfers submitted',data.spend?.submitted_sandbox_transfers||[],'Submission is recorded; settlement is unconfirmed.']
+  ];
+  $('judge-spend').classList.remove('empty-view');
+  $('judge-spend').replaceChildren(...groups.map(([label,amounts,description])=>{
+    const item=node('div','spend-row');
+    const values=amounts.length ? amounts.map(entry=>`${money(entry.amount_cents,entry.currency)} (${entry.count})`).join(' · ') : 'None recorded';
+    item.append(node('strong','',label),node('span','spend-value',values),node('small','',description));
+    return item;
+  }),(()=>{
+    const item=node('div','spend-row real-spend');
+    item.append(node('strong','','Real settled spend'),node('span','spend-value','Not verified here'),
+      node('small','','Pengwin has no production settlement ledger. These figures do not represent a bank balance.'));
+    return item;
+  })());
+
+  const usage=data.model_usage||{};
+  $('judge-model').classList.remove('empty-view');
+  $('judge-model').replaceChildren(node('div','model-count',`${usage.attempted_calls||0} / ${usage.call_limit||0}`),
+    node('p','',`Attempted ${usage.model||'model'} calls against the configured limit. This count includes requests that later failed.`),
+    node('p','model-cost','Billed token usage and model cost are not recorded by this app.'));
+}
+
+async function refreshJudge() {
+  if(!adminToken||!accessRole) return;
+  try {
+    const response=await fetch('/api/judge-activity',{headers:authHeaders()});
+    if(!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderJudge(await response.json());
+  } catch(error) { $('activity-connection').textContent=`Activity unavailable · ${error.message}`; }
+}
+
 async function refresh() {
   if(!adminToken||accessRole!=='admin') return;
   try { const response=await fetch('/api/state',{headers:authHeaders()}); if(!response.ok) throw new Error(`HTTP ${response.status}`); render(await response.json()); $('connection').textContent='● Updating'; }
@@ -89,8 +163,9 @@ async function showReceipt(id) {
 }
 
 function renderCodeRun(run) {
-  $('code-status').textContent=`Run ${run.id}: ${run.status}. ${run.status==='RUNNING'?'The crew is working.':'The recorded code and output are below.'}`;
   const attempts=run.jobs.flatMap(job=>job.output?.attempts||[]);
+  const contained=attempts.some(attempt=>attempt.exit_code===124);
+  $('code-status').textContent=`Run ${run.id}: ${run.status}. ${run.status==='RUNNING'?'The crew is working.':contained?'The ten-second timeout was contained; inspect the trace below.':'The recorded code and output are below.'}`;
   $('code-attempts').replaceChildren(...attempts.map((attempt,index)=>{
     const card=node('div','code-attempt');
     card.append(node('h3','',`Attempt ${index+1} · exit ${attempt.exit_code} · ${attempt.code_hash}`));
@@ -142,14 +217,19 @@ async function connect() {
       : 'Each flow leaves an audit trail. The hoodie page contains a malicious quantity instruction; compare the Buyer’s proposal with the payment decision.';
     $('feedback').textContent='Connected.';
     $('code-status').textContent='Describe a calculation or small data task to run in the sandbox.';
-    await refresh();
+    await Promise.all([refresh(),refreshJudge()]);
   } catch(error) { accessRole=''; $('feedback').textContent=error.message; }
 }
 
 document.querySelectorAll('[data-flow]').forEach(button=>button.addEventListener('click',()=>action(`/api/demo/${button.dataset.flow}`)));
+document.querySelectorAll('[data-code-goal]').forEach(button=>button.addEventListener('click',()=>{
+  $('code-goal').value=button.dataset.codeGoal;
+  $('code-goal').focus();
+}));
 $('connect').addEventListener('click',connect);
 $('run-code').addEventListener('click',runCode);
 $('freeze').addEventListener('click',()=>action('/api/freeze',{frozen:!latestState?.freeze}));
 $('reset').addEventListener('click',()=>action('/api/reset'));
 setInterval(refresh,5000);
+setInterval(refreshJudge,15000);
 setInterval(pollCodeRun,2000);

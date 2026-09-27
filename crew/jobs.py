@@ -10,15 +10,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from .audit import record
 from .config import settings
-from .db import AgentJob, ControlFlag, CrewRun, PendingOrder, Request, SessionLocal
+from .db import (AgentJob, Budget, ControlFlag, ConversationTurn, CrewRun, PendingOrder,
+                 ProjectRunLink, Request, RunResourceLink, SessionLocal)
 from .eventbrite import (EventbriteClient, approval_preview as eventbrite_preview,
                          checked_eventbrite_plan, published_message)
 from .inference import VultrInference
@@ -54,6 +57,8 @@ FLOW_LABELS = {
     "welcome-kit": "Berlin welcome",
     "hoodie-attack": "company hoodies",
     "natural-language": "your request",
+    "project-plan": "your event project",
+    "event-status": "your event lookup",
     "luma-event": "a Luma event draft",
     "eventbrite-event": "a public RSVP event draft",
     "code-task": "a code task",
@@ -72,9 +77,9 @@ def flow_label(flow: str) -> str:
 
 ROLE_KINDS = {
     "Concierge": {"dispatch"},
-    "Buyer": {"purchase", "requote", "code_execute"},
-    "Events": {"lunch_prepare", "lunch_complete", "luma_publish", "eventbrite_publish"},
-    "Treasurer": {"pay"},
+    "Buyer": {"purchase", "requote", "code_execute", "product_source"},
+    "Events": {"lunch_prepare", "lunch_complete", "luma_publish", "eventbrite_publish", "event_research", "eventbrite_status"},
+    "Treasurer": {"pay", "budget_review"},
 }
 UNCERTAIN_PAYMENT_STATUSES = {"PENDING_PROVIDER", "PROVIDER_OUTCOME_UNKNOWN"}
 
@@ -89,10 +94,10 @@ def _new_job(session: Session, *, run_id: str, role: str, kind: str, input_data:
 
 
 def submit_run(flow: str, *, source_user: str, channel_id: str,
-               request_text: str | None = None) -> str:
-    if flow not in FLOW_STEPS and flow not in {"natural-language", "luma-event", "eventbrite-event", "code-task"}:
+               request_text: str | None = None, context: str = "") -> str:
+    if flow not in FLOW_STEPS and flow not in {"natural-language", "project-plan", "event-status", "luma-event", "eventbrite-event", "code-task"}:
         raise ValueError("Unknown crew flow")
-    if flow in {"natural-language", "luma-event", "eventbrite-event", "code-task"}:
+    if flow in {"natural-language", "project-plan", "event-status", "luma-event", "eventbrite-event", "code-task"}:
         if flow == "natural-language" and settings.payment_mode != "simulated":
             raise ValueError("Natural-language requests require simulated payment mode")
         if not request_text or len(request_text) > 1000:
@@ -114,6 +119,8 @@ def submit_run(flow: str, *, source_user: str, channel_id: str,
         input_data = {"flow": flow}
         if request_text:
             input_data["text"] = request_text
+        if flow in {"project-plan", "event-status"} and context:
+            input_data["context"] = context[:1000]
         _new_job(session, run_id=run_id, role="Concierge", kind="dispatch", input_data=input_data)
         record(session, agent="Concierge", action="run_queued", request_id=run_id,
                detail={"flow": flow, "source_user": source_user})
@@ -300,12 +307,12 @@ def claim_next_job(role: str) -> str | None:
     # SELECT FOR UPDATE is unavailable. Postgres workers may also overlap.
     with SessionLocal.begin() as session:
         candidates = session.execute(
-            select(AgentJob.id, AgentJob.run_id).join(CrewRun, AgentJob.run_id == CrewRun.id)
+            select(AgentJob.id, AgentJob.run_id, AgentJob.kind).join(CrewRun, AgentJob.run_id == CrewRun.id)
             .where(AgentJob.role == role, AgentJob.status == "QUEUED",
                    CrewRun.status.in_(("QUEUED", "RUNNING")))
             .order_by(AgentJob.created_at, AgentJob.id).limit(10)
         ).all()
-        for job_id, run_id in candidates:
+        for job_id, run_id, kind in candidates:
             if role == "Treasurer":
                 # Serialize payout jobs for one run. If one outcome becomes
                 # uncertain, it can hold the run before another payout starts.
@@ -320,6 +327,14 @@ def claim_next_job(role: str) -> str | None:
                 ).first()
                 if other_running:
                     continue
+                if kind == "budget_review":
+                    buyer_pending = session.execute(select(AgentJob.id).where(
+                        AgentJob.run_id == run_id,
+                        AgentJob.kind == "product_source",
+                        AgentJob.status != "DONE",
+                    ).limit(1)).first()
+                    if buyer_pending:
+                        continue
             claimed = session.execute(
                 update(AgentJob).where(
                     AgentJob.id == job_id, AgentJob.status == "QUEUED",
@@ -379,11 +394,323 @@ def _item_phrase(sku: str, qty: int) -> str:
     return f"{qty} {singular if qty == 1 else plural}"
 
 
+_MONTHS = {name: index for index, names in enumerate((
+    ("jan", "january"), ("feb", "february"), ("mar", "march"),
+    ("apr", "april"), ("may",), ("jun", "june"), ("jul", "july"),
+    ("aug", "august"), ("sep", "sept", "september"),
+    ("oct", "october"), ("nov", "november"), ("dec", "december"),
+), 1) for name in names}
+
+
+def _asked_month_day(text: str) -> tuple[int, int] | None:
+    month_names = "|".join(sorted(_MONTHS, key=len, reverse=True))
+    named = re.search(rf"\b({month_names})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?\b", text, re.I)
+    if named:
+        return _MONTHS[named.group(1).lower()], int(named.group(2))
+    numeric = re.search(r"\b(\d{1,2})/(\d{1,2})(?:/\d{2,4})?\b", text)
+    if numeric:
+        month, day = int(numeric.group(1)), int(numeric.group(2))
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            return month, day
+    iso = re.search(r"\b\d{4}-(\d{2})-(\d{2})\b", text)
+    if iso:
+        return int(iso.group(1)), int(iso.group(2))
+    return None
+
+
+def _eventbrite_status_reply(run: CrewRun, question: str) -> tuple[dict, str]:
+    """Read saved Pengwin publications and, where possible, Eventbrite now."""
+    from .luma import LumaPlan
+    from .memory import link_run_resource
+
+    requested_date = _asked_month_day(question)
+    with SessionLocal() as session:
+        completed = session.execute(select(AgentJob).join(CrewRun, AgentJob.run_id == CrewRun.id).where(
+            AgentJob.kind == "eventbrite_publish", AgentJob.status == "DONE",
+            CrewRun.channel_id == run.channel_id,
+            CrewRun.source_user == run.source_user,
+        ).order_by(AgentJob.created_at.desc()).limit(20)).scalars().all()
+    matches = []
+    for published in completed:
+        try:
+            saved_input = json.loads(published.input_json)
+            saved_output = json.loads(published.output_json)
+            plan = LumaPlan.model_validate(saved_input["plan"])
+            event_id = saved_output["event_id"]
+            if not isinstance(event_id, str) or not event_id.isdecimal():
+                continue
+            if requested_date and (plan.start_at.month, plan.start_at.day) != requested_date:
+                continue
+            matches.append((plan, event_id, saved_output.get("url")))
+        except (ValueError, KeyError, TypeError):
+            continue
+    if not matches:
+        date_words = " for that date" if requested_date else ""
+        return {"count": 0}, (f"I don't see a saved Pengwin Eventbrite publication{date_words}. "
+                                "I haven't created another event.")
+    if len(matches) > 5:
+        return {"count": len(matches), "ambiguous": True}, (
+            "I found several Pengwin publications. Which event title or date should I check?"
+        )
+    lines = []
+    records = []
+    for plan, event_id, saved_url in matches:
+        current = None
+        try:
+            current = EventbriteClient().read_status(event_id)
+        except Exception:
+            pass
+        checked_at = datetime.now(timezone.utc).isoformat() if current else None
+        url = (current or {}).get("url") or saved_url
+        if not isinstance(url, str) or not url.startswith("https://www.eventbrite.com/"):
+            url = None
+        date_label = f"{plan.start_at:%b} {plan.start_at.day}, {plan.start_at.year}"
+        if current is None:
+            state = "published by Pengwin; current status not checked"
+        elif current["status"] == "live":
+            state = f"Eventbrite confirms it is live now (checked {checked_at[:16]} UTC)"
+            if current.get("listed") is False:
+                state += " (unlisted)"
+        else:
+            state = f"Eventbrite says {current['status']} (checked {checked_at[:16]} UTC)"
+        lines.append(f"{plan.name} — {date_label}: {state}." + (f" {url}" if url else ""))
+        safe_facts = {"title": plan.name, "date": plan.start_at.date().isoformat(),
+                      "status": (current or {}).get("status", "unchecked"),
+                      "checked_at": checked_at, "url": url}
+        link_run_resource(run_id=run.id, role="Events", resource_type="eventbrite_event",
+                          resource_id=event_id, safe_facts=safe_facts)
+        records.append(safe_facts)
+    return {"events": records}, "\n".join(lines)
+
+
+def _supersede_prior_handoffs(project_id: str, *, current_run_id: str) -> None:
+    """A new project revision cannot reuse an older purchase approval."""
+    with SessionLocal.begin() as session:
+        prior_ids = select(ProjectRunLink.run_id).where(
+            ProjectRunLink.project_id == project_id,
+            ProjectRunLink.run_id != current_run_id,
+        )
+        handoffs = session.execute(select(RunResourceLink).where(
+            RunResourceLink.run_id.in_(prior_ids),
+            RunResourceLink.resource_kind == "checkout_handoff",
+        )).scalars().all()
+        for handoff in handoffs:
+            facts = json.loads(handoff.facts_json)
+            if facts.get("status") != "SUPERSEDED":
+                facts["status"] = "SUPERSEDED"
+                facts["superseded_by_run"] = current_run_id
+                handoff.facts_json = json.dumps(facts, sort_keys=True)
+                record(session, agent="Buyer", action="checkout_handoff_superseded",
+                       request_id=handoff.run_id, detail={"project_revision": current_run_id})
+
+
+def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
+    from .project_planner import ProjectPlan
+    from .research import lookup_project_facts
+
+    plan = ProjectPlan.model_validate(plan_data)
+    event = plan.event
+    title = event.title if event else plan.name
+    venue = event.venue_name if event else None
+    date_phrase = event.date_phrase if event else None
+    time_phrase = event.time_phrase if event else None
+    audience = plan.invitations.audience_phrase if plan.invitations else None
+    options: list[str] = []
+    if date_phrase and re.search(r"\b(?:about|around|roughly|approximately|next)\b.*\bmonth\b|\bin a month\b", date_phrase, re.I):
+        local_day = datetime.now(ZoneInfo("America/Los_Angeles")).date() + timedelta(days=30)
+        options = [(local_day + timedelta(days=offset)).isoformat() for offset in (0, 1, 2)]
+    description = (
+        f"Join us for {title} at {venue or '[venue to confirm]'}. "
+        f"The date is {date_phrase or '[date to confirm]'} and the time is "
+        f"{time_phrase or '[time to confirm]'}. "
+        "We will share the final details after the venue and registration page are approved."
+    )
+    invite_copy = (
+        f"You're invited to {title}. We are planning it for {date_phrase or '[date]'} "
+        f"at {venue or '[venue]'}. Reply if you would like the RSVP details once confirmed."
+    )
+    venue_search = None
+    route_search = None
+    if venue:
+        venue_search = lookup_project_facts(f"{venue} event venue", kind="place", max_results=2)
+        route_search = lookup_project_facts(f"{venue} official event reservation permit", kind="web", max_results=2)
+    lines = [f"Event plan: {title}. This plan has not reserved a venue or published a new Eventbrite page."]
+    if options:
+        lines.append("Date options to confirm: " + ", ".join(options) + ".")
+    elif date_phrase:
+        lines.append(f"Requested timing: {date_phrase}; please confirm an exact calendar date.")
+    else:
+        lines.append("I need an event date.")
+    if not time_phrase:
+        lines.append("I also need a start time and expected duration.")
+    if event and event.capacity is None:
+        lines.append("I need an RSVP capacity before drafting a publishable Eventbrite page.")
+    if venue_search and venue_search.status == "ok" and venue_search.results:
+        leads = [f"{lead.title}: {lead.url}" for lead in venue_search.results if lead.url]
+        if leads:
+            lines.append("Venue search leads (availability unverified): " + " | ".join(leads[:2]))
+    if route_search and route_search.status == "ok" and route_search.results:
+        leads = [f"{lead.title}: {lead.url}" for lead in route_search.results if lead.url]
+        if leads:
+            lines.append("Possible reservation routes to verify with the venue: " + " | ".join(leads[:2]))
+    if venue_search and venue_search.status != "ok":
+        lines.append("Live venue search is unavailable; please share the park's city or official booking page.")
+    elif not venue:
+        lines.append("Which venue and city should I research?")
+    lines.append("Draft description: " + description)
+    if plan.invitations:
+        lines.append("Target audience: " + (audience or "please name the group you want to invite") + ".")
+        lines.append("Draft invitation: " + invite_copy)
+        lines.append("No mailing list was imported and no invitations were sent.")
+    output = {
+        "venue_status": "UNCONFIRMED", "eventbrite_status": "NOT_CREATED",
+        "invitation_status": "DRAFT_ONLY", "date_options": options,
+        "description_draft": description,
+        "invitation_draft": invite_copy if plan.invitations else None,
+        "research_status": (venue_search.status if venue_search else "not_requested"),
+    }
+    return output, "\n".join(lines)[:3000]
+
+
+def _project_product_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
+    from .memory import link_run_resource
+    from .project_planner import ProjectPlan
+    from .research import check_printful_water_bottle_prices, lookup_project_facts
+
+    plan = ProjectPlan.model_validate(plan_data)
+    if plan.swag is None:
+        return {"status": "NOT_REQUESTED"}, "No product sourcing was requested.",
+    quantity = plan.swag.quantity
+    search = lookup_project_facts("custom water bottles event bulk order", kind="web", max_results=2)
+    fact = check_printful_water_bottle_prices()
+    output: dict = {
+        "status": "RESEARCHED", "product": "water_bottle", "quantity": quantity,
+        "publisher_status": fact.status, "search_status": search.status,
+        "source_url": fact.source_url,
+        "price_kind": "PRODUCT_RANGE_ESTIMATE" if fact.status == "ok" else "UNAVAILABLE",
+        "currency": fact.currency, "unit_min": fact.min_price,
+        "unit_max": fact.max_price,
+        "checked_at": fact.checked_at.isoformat() if fact.checked_at else None,
+        "subtotal_min": round(quantity * fact.min_price, 2) if quantity and fact.min_price is not None else None,
+        "subtotal_max": round(quantity * fact.max_price, 2) if quantity and fact.max_price is not None else None,
+        "checkout_status": "NOT_READY",
+    }
+    lines = ["Buyer sourced custom water bottles; no order or payment was placed."]
+    if fact.status == "ok":
+        lines.append(f"Printful's official product range is ${fact.min_price:.2f}–${fact.max_price:.2f} per bottle, checked {fact.checked_at:%Y-%m-%d %H:%M} UTC: {fact.source_url}")
+        if quantity:
+            lines.append(f"For {quantity}, product subtotal estimate: ${output['subtotal_min']:.2f}–${output['subtotal_max']:.2f}.")
+        lines.append("Shipping, tax, artwork, variant, stock, and the final checkout total are not quoted.")
+        link_run_resource(run_id=run.id, role="Buyer", resource_type="publisher_product",
+                          resource_id="printful-water-bottles", safe_facts={
+                              "source_url": fact.source_url, "checked_at": output["checked_at"],
+                              "currency": fact.currency, "unit_min": fact.min_price,
+                              "unit_max": fact.max_price, "price_kind": output["price_kind"],
+                          })
+    else:
+        lines.append("The official product price could not be checked, so I have no current estimate.")
+    if search.status == "ok" and search.results:
+        leads = [f"{lead.title}: {lead.url}" for lead in search.results if lead.url]
+        if leads:
+            lines.append("Other search leads (not verified quotes): " + " | ".join(leads[:2]))
+    elif search.status != "ok":
+        lines.append("Broader live product search is unavailable.")
+    missing = []
+    if quantity is None:
+        missing.append("quantity")
+    if not plan.swag.design_phrase:
+        missing.append("print-ready artwork")
+    missing.extend(("exact product variant", "delivery destination", "landed checkout total"))
+    lines.append("For a checkout handoff, I still need " + ", ".join(missing) + ".")
+    lines.append("A later exact handoff will need fresh Slack approval if the quantity or price changes.")
+    return output, "\n".join(lines)[:3000]
+
+
+def _project_budget_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
+    from .memory import link_run_resource
+    from .project_planner import ProjectPlan
+
+    plan = ProjectPlan.model_validate(plan_data)
+    reason = f"Water bottles and event planning for {plan.event.title if plan.event else plan.name}"
+    with SessionLocal() as session:
+        budget = session.execute(select(Budget).where(
+            Budget.office_id == "SF", Budget.category == "swag",
+        )).scalar_one_or_none()
+        sourced = session.execute(select(AgentJob).where(
+            AgentJob.run_id == run.id,
+            AgentJob.kind == "product_source", AgentJob.status == "DONE",
+        ).order_by(AgentJob.created_at.desc()).limit(1)).scalar_one_or_none()
+        source_output = json.loads(sourced.output_json) if sourced else {}
+    room_cents = max(0, budget.limit_cents - budget.spent_cents - budget.reserved_cents) if budget else None
+    low = source_output.get("subtotal_min")
+    high = source_output.get("subtotal_max")
+    over_budget = bool(room_cents is not None and high is not None and high * 100 > room_cents)
+    output = {
+        "reason": reason, "review_status": "ESTIMATE_ONLY", "product_subtotal_min": low,
+        "product_subtotal_max": high, "currency": "USD" if high is not None else None,
+        "internal_demo_budget_room_cents": room_cents, "over_internal_budget": over_budget,
+        "payment_status": "NONE", "reserved_cents": 0,
+    }
+    lines = [f"Treasurer recorded the purpose: {reason}."]
+    if high is not None:
+        lines.append(f"The current product-only estimate is ${low:.2f}–${high:.2f}; shipping and tax remain unknown.")
+        if over_budget:
+            lines.append("The high end exceeds the internal demo swag allocation. We need a revised plan.")
+        else:
+            lines.append("The product estimate fits the internal demo swag allocation, but this is not checkout approval.")
+    else:
+        lines.append("I cannot assess an amount until Buyer has a current quote and quantity.")
+    lines.append("No funds were reserved, no sandbox transfer was submitted, and no real payment was made.")
+    link_run_resource(run_id=run.id, role="Treasurer", resource_type="budget_review",
+                      resource_id="swag-review", safe_facts=output)
+    return output, "\n".join(lines)[:2000]
+
+
 def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, dict]], str, bool]:
     if job.kind not in ROLE_KINDS.get(job.role, set()):
         raise ValueError("Job kind exceeds role capability")
     data = json.loads(job.input_json)
     if job.role == "Concierge":
+        if run.flow == "event-status":
+            return {}, [("Events", "eventbrite_status", {
+                "question": data.get("text", ""), "context": data.get("context", "")
+            })], "Events is checking our saved publications and their current provider status.", False
+        if run.flow == "project-plan":
+            from .memory import create_or_update_project
+            from .project_planner import checked_project_plan, project_plan_summary
+            try:
+                request_text = data["text"]
+                context = data.get("context", "")
+                plan = checked_project_plan(
+                    VultrInference().project_plan(request_text=request_text, context=context),
+                    request_text, context=context,
+                )
+            except (KeyError, ValueError) as exc:
+                question = ("I can coordinate the event, water bottles, and invitations. "
+                            "Please give the event location and approximate date, plus any bottle quantity or audience you know. "
+                            "Nothing has been booked, bought, or sent.")
+                return {"clarification": str(exc)[:160]}, [], question, False
+            except Exception as exc:
+                message = ("I couldn't build a checked project plan right now. "
+                           "Please try again shortly; nothing was booked, bought, or sent.")
+                return {"unavailable": type(exc).__name__}, [], message, False
+            plan_data = plan.model_dump(mode="json")
+            project_id = create_or_update_project(
+                run_id=run.id, owner_user_id=run.source_user,
+                channel_id=run.channel_id, thread_root_ts=data.get("thread_root_ts"),
+                name=plan.name, safe_plan=plan_data, status="ACTIVE",
+            )
+            if project_id != run.id:
+                _supersede_prior_handoffs(project_id, current_run_id=run.id)
+            successors: list[tuple[str, str, dict]] = []
+            if plan.event is not None or plan.invitations is not None:
+                successors.append(("Events", "event_research", {"plan": plan_data}))
+            if plan.swag is not None:
+                successors.append(("Buyer", "product_source", {"plan": plan_data}))
+            successors.append(("Treasurer", "budget_review", {"plan": plan_data}))
+            return plan_data, successors, (
+                project_plan_summary(plan) + "\nEvents, Buyer, and Treasurer are checking their parts now."
+            ), False
         if run.flow == "code-task":
             return {}, [("Buyer", "code_execute", {"goal": data["text"]})], (
                 "Buyer is running the code in a fresh, isolated workspace. "
@@ -444,6 +771,18 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
             f"On it — the crew is handling {flow_label(run.flow)}. "
             "I'll keep the updates in this thread."
         ), False
+    if job.role == "Events" and job.kind == "eventbrite_status":
+        output, message = _eventbrite_status_reply(run, data.get("question", ""))
+        return output, [], message, False
+    if job.role == "Events" and job.kind == "event_research":
+        output, message = _project_event_work(run, data["plan"])
+        return output, [], message, False
+    if job.role == "Buyer" and job.kind == "product_source":
+        output, message = _project_product_work(run, data["plan"])
+        return output, [], message, False
+    if job.role == "Treasurer" and job.kind == "budget_review":
+        output, message = _project_budget_work(run, data["plan"])
+        return output, [], message, False
     if job.role == "Buyer" and job.kind == "code_execute":
         if settings.sandbox_mode != "docker":
             raise RuntimeError("Code tasks require the isolated Docker sandbox VM")
@@ -613,13 +952,19 @@ def _notify(run_id: str, role: str, message: str) -> None:
             existing = session.get(ControlFlag, key)
             channel_id = run.channel_id
             thread_ts = existing.value if existing else None
+            if not thread_ts:
+                inbound = session.execute(select(ConversationTurn.thread_root_ts).where(
+                    ConversationTurn.run_id == run_id,
+                    ConversationTurn.direction == "in",
+                ).order_by(ConversationTurn.created_at.desc()).limit(1)).scalar_one_or_none()
+                thread_ts = inbound or None
         # Keep identifiers in the durable run record, not at the front of chat.
         prefix = f"Run {run_id}: "
         ts = post_role_update(role, channel_id,
                               message.removeprefix(prefix), thread_ts=thread_ts)
-        if role == "Concierge" and not thread_ts:
+        if role == "Concierge" and not existing:
             with SessionLocal.begin() as session:
-                session.add(ControlFlag(key=key, value=ts))
+                session.add(ControlFlag(key=key, value=thread_ts or ts))
     except Exception as exc:
         # A Slack outage does not replay a completed purchase. The run remains
         # queryable via its durable job and audit records.

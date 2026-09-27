@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 from .config import settings
@@ -135,6 +135,91 @@ class ControlFlag(Base):
     __tablename__ = "control_flags"
     key: Mapped[str] = mapped_column(String(40), primary_key=True)
     value: Mapped[str] = mapped_column(String(100))
+
+
+class SlackDelivery(Base):
+    """One durable claim per Slack event, including read-only conversations.
+
+    The hash is global to preserve the old delivery claim semantics. It is not a
+    foreign key to a run so a demo reset can retain deduplication claims.
+    """
+
+    __tablename__ = "slack_deliveries"
+    delivery_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    role: Mapped[str] = mapped_column(String(20))
+    channel_id: Mapped[str] = mapped_column(String(80))
+    source_user: Mapped[str] = mapped_column(String(100))
+    state: Mapped[str] = mapped_column(String(20), default="PENDING")
+    run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    reply_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class ConversationTurn(Base):
+    """Bounded, redacted Slack context; provider facts stay in their own records."""
+
+    __tablename__ = "conversation_turns"
+    __table_args__ = (
+        UniqueConstraint("role", "direction", "delivery_hash", name="uq_turn_delivery"),
+        UniqueConstraint("role", "channel_id", "message_ts", name="uq_turn_message_ts"),
+        Index("ix_turn_scope_thread_time", "channel_id", "source_user", "role", "thread_root_ts", "created_at"),
+        Index("ix_turn_scope_time", "channel_id", "source_user", "role", "created_at"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    role: Mapped[str] = mapped_column(String(20))
+    direction: Mapped[str] = mapped_column(String(8))
+    channel_id: Mapped[str] = mapped_column(String(80))
+    source_user: Mapped[str] = mapped_column(String(100))
+    thread_root_ts: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    message_ts: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    delivery_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("crew_runs.id"), nullable=True, index=True)
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class CrewProject(Base):
+    """A private project scope for grouping related runs without Slack history."""
+
+    __tablename__ = "crew_projects"
+    __table_args__ = (UniqueConstraint("channel_id", "owner_user_id", "thread_root_ts",
+                                       name="uq_project_thread_scope"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    channel_id: Mapped[str] = mapped_column(String(80), index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(100), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    thread_root_ts: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    plan_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(30), default="ACTIVE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class ProjectRunLink(Base):
+    __tablename__ = "project_run_links"
+    __table_args__ = (UniqueConstraint("project_id", "run_id", name="uq_project_run"),
+                      UniqueConstraint("run_id", name="uq_run_project"))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("crew_projects.id"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("crew_runs.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class RunResourceLink(Base):
+    """Typed link to a verified resource, never proof of its current provider state."""
+
+    __tablename__ = "run_resource_links"
+    __table_args__ = (UniqueConstraint("run_id", "resource_kind", "resource_id", name="uq_run_resource"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("crew_runs.id"), index=True)
+    role: Mapped[str] = mapped_column(String(20))
+    resource_kind: Mapped[str] = mapped_column(String(40))
+    resource_id: Mapped[str] = mapped_column(String(160))
+    visibility: Mapped[str] = mapped_column(String(20), default="owner")
+    facts_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}

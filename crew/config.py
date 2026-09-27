@@ -21,6 +21,8 @@ class Settings:
     vultr_key: str = os.getenv("VULTR_INFERENCE_KEY", "")
     vultr_model: str = os.getenv("VULTR_MODEL", "")
     vultr_max_calls: int = int(os.getenv("VULTR_MAX_CALLS", "1000"))
+    brave_key: str = os.getenv("BRAVE_SEARCH_API_KEY", "")
+    brave_max_searches: int = int(os.getenv("BRAVE_MAX_SEARCHES", "200"))
     airwallex_client_id: str = os.getenv("AIRWALLEX_CLIENT_ID", "")
     airwallex_api_key: str = os.getenv("AIRWALLEX_API_KEY", "")
     airwallex_base: str = os.getenv("AIRWALLEX_SANDBOX_BASE", "https://api.sandbox.airwallex.com")

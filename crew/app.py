@@ -3,17 +3,20 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from .audit import record
 from .config import settings
-from .db import AuditEvent, Budget, ControlFlag, Payment, PendingOrder, Request, SessionLocal, Task, Vendor
+from .db import AgentJob, AuditEvent, Budget, ControlFlag, CrewRun, Payment, PendingOrder, Request, SessionLocal, Task, Vendor
 from .inference import VultrInference
 from .seed import seed_demo
 
@@ -168,6 +171,165 @@ class CodeGoal(BaseModel):
 @app.get("/api/demo-access")
 def demo_access(role: str = Depends(require_demo)):
     return {"access": role}
+
+
+_JUDGE_ROLES = {"Concierge", "Buyer", "Events", "Treasurer", "Policy", "Control"}
+_JUDGE_FLOWS = {
+    "berlin-pantry": "Berlin pantry demo", "welcome-kit": "Welcome kit demo",
+    "hoodie-attack": "Hoodie safety demo", "natural-language": "Crew request",
+    "luma-event": "Luma event draft", "eventbrite-event": "Free RSVP event",
+    "code-task": "Sandbox code task",
+}
+_JUDGE_KINDS = {
+    ("Concierge", "dispatch"): "Coordinate",
+    ("Buyer", "purchase"): "Check mock offer", ("Buyer", "requote"): "Check corrected offer",
+    ("Buyer", "code_execute"): "Execute code", ("Events", "lunch_prepare"): "Prepare lunch",
+    ("Events", "lunch_complete"): "Finish lunch plan", ("Events", "luma_publish"): "Publish Luma event",
+    ("Events", "eventbrite_publish"): "Publish RSVP page", ("Treasurer", "pay"): "Check payment",
+}
+_JUDGE_STATUSES = {"QUEUED", "RUNNING", "WAITING_APPROVAL", "COMPLETE", "DONE", "FAILED", "HELD", "REJECTED"}
+
+
+def _utc_iso(value: datetime) -> str:
+    # SQLite drops the timezone even though these values are written in UTC.
+    return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).isoformat()
+_JUDGE_ACTIONS = {
+    "run_queued": ("Request queued", "queued", "Control plane accepted the request."),
+    "web_code_queued": ("Code task queued", "queued", "The sandbox has not reported an output yet."),
+    "web_demo_queued": ("Demo workflow queued", "queued", "Control plane accepted the demo request."),
+    "request_planned": ("Workflow prepared", "complete", "A plan was recorded for the crew."),
+    "selection_proposed": ("Mock offer selected", "complete", "Buyer recorded a proposed choice."),
+    "selection_rejected": ("Mock offer rejected", "blocked", "Buyer rejected a mismatched choice."),
+    "requote_after_block": ("Mock offer corrected", "complete", "Buyer checked the quantity again."),
+    "pending_order_created": ("Proposed order recorded", "proposed", "The amount is a mock-store quote, not a charge."),
+    "event_task_created": ("Event task prepared", "complete", "Events received a plan to review."),
+    "lunch_planned": ("Lunch plan prepared", "complete", "No venue reservation is implied."),
+    "lunch_payment_status": ("Lunch payment status recorded", "complete", "See the separate spending labels below."),
+    "event_approved": ("Event draft approved", "approved", "A human approval was recorded before publication."),
+    "event_rejected": ("Event draft rejected", "blocked", "Publication was stopped."),
+    "eventbrite_draft_created": ("Eventbrite draft created", "complete", "The provider returned a draft record."),
+    "eventbrite_free_ticket_created": ("Free RSVP ticket created", "complete", "The provider returned a ticket record."),
+    "luma_event_created": ("Luma event created", "complete", "The provider returned an event record."),
+    "payment_blocked": ("Payment blocked", "blocked", "The policy gate stopped the payment."),
+    "payment_reserved": ("Budget reserved", "reserved", "Reservation is an internal ledger state."),
+    "provider_error": ("Payment outcome needs review", "held", "No settlement is confirmed by this record."),
+    "agent_job_held": ("Agent step held", "held", "The worker stopped for review."),
+    "agent_job_failed": ("Agent step failed", "failed", "The worker stopped without claiming success."),
+    "slack_update_failed": ("Slack update failed", "failed", "The durable task record remains available."),
+}
+
+
+def _judge_event(event: AuditEvent) -> dict | None:
+    """Build a fixed, low-detail proof item; never return audit detail verbatim."""
+    if event.agent not in _JUDGE_ROLES:
+        return None
+    template = _JUDGE_ACTIONS.get(event.action)
+    detail = {}
+    if event.action in {"sandbox_code_attempt", "payment_submitted", "agent_job_done", "freeze_changed"}:
+        try:
+            detail = json.loads(event.detail_json)
+            if not isinstance(detail, dict):
+                detail = {}
+        except (TypeError, ValueError):
+            detail = {}
+    if event.action == "sandbox_code_attempt":
+        attempt = detail.get("attempt")
+        exit_code = detail.get("exit_code")
+        code_hash = detail.get("code_hash")
+        if (type(attempt) is not int or not 1 <= attempt <= 2
+                or type(exit_code) is not int or not -255 <= exit_code <= 255
+                or not isinstance(code_hash, str) or not re.fullmatch(r"[0-9a-f]{12}", code_hash)):
+            return None
+        status = "contained" if exit_code == 124 else "complete" if exit_code == 0 else "failed"
+        title = "Code attempt contained" if exit_code == 124 else "Code attempt executed"
+        proof = f"Attempt {attempt} · exit {exit_code} · SHA-256 prefix {code_hash}"
+    elif event.action == "payment_submitted":
+        if detail.get("simulated") is True:
+            title, status, proof = "Demo checkout recorded", "simulated", "Local simulation; no real charge."
+        elif detail.get("simulated") is False:
+            provider_status = detail.get("provider_status")
+            if not isinstance(provider_status, str):
+                return None
+            if provider_status.upper() in {"FAILED", "CANCELLED", "APPROVAL_REJECTED"}:
+                title, status, proof = "Sandbox transfer rejected", "blocked", "Provider reported rejection."
+            else:
+                title, status, proof = "Sandbox transfer submitted", "submitted", "Provider submission; settlement unconfirmed."
+        else:
+            return None
+    elif event.action == "agent_job_done":
+        task = _JUDGE_KINDS.get((event.agent, detail.get("kind")))
+        title, status, proof = (f"{task} completed" if task else "Agent step completed"), "complete", "A durable worker result was recorded."
+    elif event.action == "freeze_changed":
+        frozen = detail.get("frozen")
+        if type(frozen) is not bool:
+            return None
+        title, status, proof = ("Payment gate frozen", "held", "New payments are blocked.") if frozen else (
+            "Payment gate unfrozen", "complete", "The admin restored the payment gate.")
+    elif template is not None:
+        title, status, proof = template
+    else:
+        return None
+    return {"ts": _utc_iso(event.ts), "role": event.agent, "title": title,
+            "status": status, "evidence": proof}
+
+
+def _currency_totals(session: Session, model, allowed_status: str | None = None,
+                     simulated: bool | None = None) -> list[dict]:
+    query = (select(model.currency, func.sum(model.amount_cents), func.count(model.id))
+             .where(model.currency.in_(("USD", "EUR")), model.amount_cents >= 0)
+             .group_by(model.currency).order_by(model.currency))
+    if allowed_status is not None:
+        query = query.where(model.status == allowed_status)
+    if simulated is not None:
+        query = query.where(model.simulated.is_(simulated))
+    return [{"currency": currency, "amount_cents": int(total), "count": count}
+            for currency, total, count in session.execute(query)]
+
+
+def _judge_run(run: CrewRun, jobs: list[AgentJob]) -> dict | None:
+    flow = _JUDGE_FLOWS.get(run.flow)
+    if flow is None or run.status not in _JUDGE_STATUSES:
+        return None
+    steps = [{"role": job.role, "task": _JUDGE_KINDS[(job.role, job.kind)], "status": job.status}
+             for job in jobs if (job.role, job.kind) in _JUDGE_KINDS and job.status in _JUDGE_STATUSES]
+    return {"flow": flow, "status": run.status, "created_at": _utc_iso(run.created_at), "steps": steps[:8]}
+
+
+@app.get("/api/judge-activity")
+def judge_activity(_role: str = Depends(require_demo)):
+    """A deliberately narrow read model for the judge token."""
+    with SessionLocal() as session:
+        rows = session.execute(select(AuditEvent).order_by(AuditEvent.id.desc()).limit(160)).scalars().all()
+        activity = [item for row in rows if (item := _judge_event(row)) is not None][:36]
+        recent_runs = session.execute(select(CrewRun).order_by(CrewRun.created_at.desc()).limit(8)).scalars().all()
+        recent_jobs = session.execute(select(AgentJob).where(AgentJob.run_id.in_([run.id for run in recent_runs]))
+                                      .order_by(AgentJob.created_at)).scalars().all() if recent_runs else []
+        jobs_by_run: dict[str, list[AgentJob]] = {run.id: [] for run in recent_runs}
+        for job in recent_jobs:
+            jobs_by_run[job.run_id].append(job)
+        runs = [item for run in recent_runs if (item := _judge_run(run, jobs_by_run[run.id])) is not None]
+        proposed = _currency_totals(session, PendingOrder)
+        simulated = _currency_totals(session, Payment, "SIMULATED", True)
+        submitted_sandbox = _currency_totals(session, Payment, "SUBMITTED_SANDBOX", False)
+        counter = session.get(ControlFlag, "vultr_calls")
+    try:
+        attempted_calls = max(0, int(counter.value)) if counter else 0
+    except ValueError:
+        attempted_calls = 0
+    return {
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "activity": activity,
+        "runs": runs,
+        "spend": {
+            "proposed_mock_orders": proposed,
+            "simulated_checkouts": simulated,
+            "submitted_sandbox_transfers": submitted_sandbox,
+            "real_settled": None,
+        },
+        "model_usage": {"model": settings.vultr_model if settings.planner_mode == "vultr" else None,
+                        "attempted_calls": attempted_calls, "call_limit": settings.vultr_max_calls,
+                        "billed_cost_usd": None},
+    }
 
 
 @app.post("/api/code-runs", dependencies=[Depends(require_demo)])

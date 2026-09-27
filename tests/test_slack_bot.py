@@ -22,8 +22,15 @@ import crew.slack_bot as bot
 
 seed_demo(reset=True)
 queued = []
-bot._submit_run = lambda flow, *, source_user, channel_id, request_text=None: queued.append(
-    (flow, source_user, channel_id, request_text)) or 'run-123'
+seen = set()
+def fake_submit(flow, *, source_user, channel_id, delivery_id, request_text=None,
+                reply_text=None, context='', thread_root_ts=None):
+    if delivery_id in seen:
+        return bot.memory.EnqueuedRun('run-123', True, reply_text)
+    seen.add(delivery_id)
+    queued.append((flow, source_user, channel_id, request_text))
+    return bot.memory.EnqueuedRun('run-123', False, reply_text)
+bot._submit_run = fake_submit
 assert bot.is_slack_allowed('U_ALLOWED')
 assert bot.is_slack_allowed('U_ADMIN')
 assert not bot.is_slack_allowed('U_OTHER')
@@ -41,7 +48,7 @@ command = {'user_id': 'U_ALLOWED', 'channel_id': 'C_DEMO',
 first = bot.handle_command(command)
 assert first.startswith('On it.') and 'run-123' not in first, first
 assert queued == [('berlin-pantry', 'U_ALLOWED', 'C_DEMO', None)]
-assert 'already received' in bot.handle_command(command)
+assert bot.handle_command(command) == first
 assert len(queued) == 1
 natural = bot.handle_command({'user_id': 'U_ALLOWED', 'channel_id': 'C_DEMO',
                               'text': 'order 3 oat milks for Berlin', 'trigger_id': 't2'})
@@ -133,4 +140,69 @@ message = slack_bot.run_status_text("6a8cd6b1-e29e-4f67-b19c-6bb8d9a1de68", user
 assert message == "Done. Events published your public RSVP page:\\nhttps://www.eventbrite.com/e/example-123"
 '''
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+
+
+def test_mentions_keep_followups_in_the_original_user_thread(tmp_path):
+    env = os.environ.copy()
+    env.update({
+        "DATABASE_URL": f"sqlite:///{tmp_path / 'threads.db'}",
+        "PAYMENT_MODE": "simulated", "PLANNER_MODE": "deterministic",
+        "SANDBOX_MODE": "local", "SLACK_DEMO_CHANNEL_ID": "C_DEMO",
+        "SLACK_ALLOWED_USER_IDS": "U_A,U_B", "SLACK_ADMIN_USER_IDS": "",
+        "SLACK_CONCIERGE_BOT_TOKEN": "test-concierge",
+        "SLACK_APP_TOKEN": "test-app",
+        "SLACK_EVENTS_BOT_TOKEN": "test-events",
+        "SLACK_EVENTS_APP_TOKEN": "test-events-app",
+    })
+    script = '''
+from crew.db import init_db
+from crew import dialogue, role_slack_bot, slack_bot
+init_db()
+class FakeApp:
+    def __init__(self, *, token):
+        self.events = {}
+    def event(self, name):
+        def decorate(fn):
+            self.events[name] = fn
+            return fn
+        return decorate
+    def command(self, name):
+        return lambda fn: fn
+slack_bot.App = FakeApp
+role_slack_bot.App = FakeApp
+contexts = []
+def fake_answer(role, text, **kwargs):
+    contexts.append((role, kwargs['user_id'], kwargs['context']))
+    return 'Acknowledged by ' + role
+dialogue.answer = fake_answer
+role_slack_bot.answer = fake_answer
+concierge = slack_bot.build_app().events['app_mention']
+events = role_slack_bot.build_app('Events').events['app_mention']
+sent = []
+def say(**options):
+    sent.append(options)
+    return {'ts': '999.' + str(len(sent)).zfill(6)}
+concierge({'user':'U_A','channel':'C_DEMO','ts':'100.001',
+           'text':'<@CONCIERGE> Need 40 bottles'}, {'event_id':'E1'}, say)
+assert sent[-1]['thread_ts'] == '100.001'
+concierge({'user':'U_A','channel':'C_DEMO','ts':'100.003',
+           'thread_ts':'100.001','text':'<@CONCIERGE> Make that 50'},
+          {'event_id':'E2'}, say)
+assert sent[-1]['thread_ts'] == '100.001'
+assert 'USER: Need 40 bottles' in contexts[-1][2], contexts[-1]
+assert 'PENGWIN Concierge: Acknowledged' in contexts[-1][2]
+concierge({'user':'U_B','channel':'C_DEMO','ts':'200.001',
+           'text':'<@CONCIERGE> My own project'}, {'event_id':'E3'}, say)
+assert contexts[-1] == ('Concierge', 'U_B', '')
+events({'user':'U_A','channel':'C_DEMO','ts':'300.001',
+        'text':'<@EVENTS> Check my event'}, {'event_id':'E4'}, say)
+assert sent[-1]['thread_ts'] == '300.001'
+events({'user':'U_A','channel':'C_DEMO','ts':'300.003','thread_ts':'300.001',
+        'text':'<@EVENTS> How about now?'}, {'event_id':'E5'}, say)
+assert 'USER: Check my event' in contexts[-1][2]
+assert 'Need 40 bottles' not in contexts[-1][2]
+'''
+    result = subprocess.run([sys.executable, "-c", script], env=env,
+                            capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr

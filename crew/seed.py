@@ -4,19 +4,25 @@ import os
 
 from sqlalchemy import delete, select
 
-from .db import AgentJob, AuditEvent, Budget, ControlFlag, CrewRun, Office, Payment, PendingOrder, Request, Task, Vendor, SessionLocal, init_db
+from .db import (AgentJob, AuditEvent, Budget, ControlFlag, ConversationTurn,
+                 CrewProject, CrewRun, Office, Payment, PendingOrder,
+                 ProjectRunLink, Request, RunResourceLink, Task, Vendor,
+                 SessionLocal, init_db)
 
 
 def seed_demo(*, reset: bool = False) -> None:
     init_db()
     with SessionLocal.begin() as session:
         if reset:
-            for model in (AgentJob, CrewRun, Payment, PendingOrder, Task, Request, AuditEvent, Budget, Vendor, Office):
+            for model in (RunResourceLink, ProjectRunLink, ConversationTurn,
+                          AgentJob, CrewProject, CrewRun, Payment, PendingOrder,
+                          Task, Request, AuditEvent, Budget, Vendor, Office):
                 session.execute(delete(model))
-            # Demo resets must not refresh paid inference or Slack delivery claims.
+            # Demo resets must not refresh paid inference, search, or Slack delivery claims.
             # Slack may redeliver an old event after a local reset.
             session.execute(delete(ControlFlag).where(
                 ControlFlag.key != "vultr_calls",
+                ControlFlag.key != "brave_searches",
                 ~ControlFlag.key.like("slack_delivery_%"),
             ))
         if session.get(Office, "SF") is None:
@@ -49,3 +55,5 @@ def seed_demo(*, reset: bool = False) -> None:
             session.add(ControlFlag(key="freeze", value="false"))
         if session.get(ControlFlag, "vultr_calls") is None:
             session.add(ControlFlag(key="vultr_calls", value="0"))
+        if session.get(ControlFlag, "brave_searches") is None:
+            session.add(ControlFlag(key="brave_searches", value="0"))

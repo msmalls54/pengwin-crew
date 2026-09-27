@@ -9,6 +9,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .dialogue import answer
+from . import memory
 from .seed import seed_demo
 from .slack_bot import is_demo_channel, is_slack_allowed
 
@@ -41,13 +42,40 @@ def build_app(role: str) -> App:
             say("This Slack user is not allowed to run Pengwin requests.")
             return
         text = re.sub(r"<@[^>]+>", "", event.get("text", "")).strip()
-        delivery_id = "event:" + body.get("event_id", "") if body.get("event_id") else ""
-        reply = answer(role, text, user_id=user_id, channel_id=channel_id,
-                       delivery_id=delivery_id, thread_ts=event.get("thread_ts"))
+        thread_root_ts = event.get("thread_ts") or event.get("ts")
+        delivery_id = ("event:" + body["event_id"] if body.get("event_id") else
+                       f"message:{channel_id}:{event.get('ts', '')}")
+        claim = memory.record_inbound(role=role, user_id=user_id, channel_id=channel_id,
+                                      delivery_id=delivery_id, text=text,
+                                      message_ts=event.get("ts"),
+                                      thread_root_ts=thread_root_ts)
+        if not claim.accepted:
+            return
+        context = memory.format_recent_turns(memory.recent_turns(
+            role=role, user_id=user_id, channel_id=channel_id,
+            thread_root_ts=thread_root_ts, exclude_delivery_id=delivery_id))
+        if claim.cached_reply:
+            reply = claim.cached_reply
+        else:
+            thread_token = memory.set_active_thread_root(thread_root_ts)
+            try:
+                reply = answer(role, text, user_id=user_id, channel_id=channel_id,
+                               delivery_id=delivery_id, thread_ts=event.get("thread_ts"),
+                               context=context)
+            finally:
+                memory.reset_active_thread_root(thread_token)
+        memory.cache_reply(delivery_id=delivery_id, user_id=user_id,
+                           channel_id=channel_id, reply=reply)
         options = {"text": reply}
-        if event.get("thread_ts"):
-            options["thread_ts"] = event["thread_ts"]
-        say(**options)
+        if thread_root_ts:
+            options["thread_ts"] = thread_root_ts
+        sent = say(**options)
+        posted_ts = sent.get("ts") if sent is not None else None
+        if posted_ts:
+            memory.record_outbound(role=role, user_id=user_id, channel_id=channel_id,
+                                   delivery_id=delivery_id, reply=reply,
+                                   message_ts=str(posted_ts),
+                                   thread_root_ts=thread_root_ts)
 
     return bot
 
