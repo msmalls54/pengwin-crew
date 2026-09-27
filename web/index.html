@@ -3,45 +3,79 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pengwin Crew</title>
+  <meta name="description" content="Pengwin Crew plans events in Slack. See a recorded four-agent event workflow and inspect its Challenge 1 sandbox execution proof.">
+  <title>Pengwin Crew · Event planning in Slack</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/app.js" defer></script>
 </head>
 <body class="demo-only">
   <div class="shell">
-    <header>
-      <div><span class="eyebrow">PENGWIN / EXECUTION PROOF</span><h1>Pengwin Crew</h1><p>Pengwin works in Slack. This proof view shows a task executed inside a disposable Vultr sandbox and the output it actually returned.</p></div>
-      <div id="mode" class="mode">Demo access required</div>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="Pengwin Crew, back to top"><span class="brand-mark" aria-hidden="true">P</span><span><strong>Pengwin Crew</strong><small>Event operations in Slack</small></span></a>
+      <span class="page-label">Challenge 1 · Judge proof</span>
     </header>
-    <main>
-      <section class="controls card">
-        <div><h2 id="controls-title">Connect to Pengwin</h2><p id="controls-desc">Enter a demo token for the sandbox lab. Operator access also opens the office workflow controls and audit view.</p></div>
-        <div class="auth"><label for="token">Demo or operator token</label><input id="token" type="password" autocomplete="off" placeholder="Enter access token"><button id="connect" class="secondary">Connect</button></div>
-        <div class="actions"><button data-flow="berlin-pantry">Berlin pantry</button><button data-flow="welcome-kit">New hire kit + lunch</button><button data-flow="hoodie-attack" class="attack">Company hoodies + attack</button><button id="freeze" class="secondary">Freeze payments</button><button id="reset" class="secondary">Reset demo</button></div>
-        <p id="feedback" role="status" aria-live="polite"></p>
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <span class="eyebrow">FROM REQUEST TO REVIEWABLE PLAN</span>
+          <h1 id="hero-title">Plan an event from one Slack message.</h1>
+          <p class="hero-lead">Concierge coordinates Events, Buyer, and Treasurer in Slack. The crew researches the venue, sources supplies, drafts invitations, and gives you a budget to review.</p>
+          <div class="hero-actions"><a class="primary-link" href="#recorded-example">See what each agent did <span aria-hidden="true">↗</span></a><a class="text-link" href="#judge-proof">Inspect recorded work <span aria-hidden="true">↓</span></a></div>
+          <p class="hero-context"><strong>Why this page exists:</strong> It gives judges public, sanitized evidence of work that happens in Slack. A private token unlocks the separate code execution demonstration below.</p>
+        </div>
+        <aside class="scenario-card" aria-label="Recorded event example summary">
+          <div class="scenario-top"><span class="scenario-icon" aria-hidden="true">#</span><span>Recorded example</span><span class="scenario-type">Slack workflow</span></div>
+          <p class="scenario-request">A late-October event at Salesforce Park, with invitations and 24 water bottles.</p>
+          <div class="scenario-divider"></div>
+          <div class="scenario-outcome"><span class="scenario-dot" aria-hidden="true"></span><div><strong>Plan prepared for review</strong><span>Venue availability, guest list, checkout, and payment remain unconfirmed.</span></div></div>
+          <p class="scenario-footnote">Summary of a saved demonstration, not a live venue or order status.</p>
+        </aside>
       </section>
-      <section class="card lab">
-        <div><span class="eyebrow">SANDBOX LAB</span><h2>Give the crew a task</h2><p>Vultr writes Python, a disposable container runs it, and you can inspect the exact code, stdout, stderr, and timeout result. The code container has no network access or office credentials.</p></div>
-        <label for="code-goal">Plain-English goal</label>
-        <textarea id="code-goal" maxlength="1000" rows="3" placeholder="Calculate 19 plus 23 and show the result."></textarea>
-        <div class="lab-examples" aria-label="Example goals"><span>Try:</span><button type="button" data-code-goal="Calculate 19 plus 23 and print the answer.">Calculation</button><button type="button" data-code-goal="Write and run exactly this Python program, without adding imports, timers, try/except, break, or any other lines: print('Starting', flush=True) followed by while True: pass. This safety test requires the external container's ten-second limit to stop the infinite loop. Do not implement your own timeout.">Timeout containment</button></div>
-        <button id="run-code">Run in sandbox</button>
-        <p id="code-status" role="status" aria-live="polite">Enter a demo token to run a task.</p>
-        <div id="code-attempts"></div>
+
+      <section class="recorded-example" id="recorded-example" aria-labelledby="recorded-title">
+        <div class="section-heading"><div><span class="eyebrow">ONE REQUEST · FOUR ROLES</span><h2 id="recorded-title">What each agent actually did</h2><p>These are checked outputs from the saved event workflow. Each role hands its result back to the shared plan.</p></div><span class="section-aside">Recorded example · Sep 27</span></div>
+        <div class="role-grid">
+          <article class="role-card concierge"><div class="role-top"><span class="role-number">01</span><span class="role-status">Coordinated</span></div><h3>Concierge</h3><p>Created one plan, assigned Events, Buyer, and Treasurer, and recalled the updated bottle quantity after a restart.</p><div class="role-result"><span>Output</span><strong>One durable event handoff</strong></div></article>
+          <article class="role-card events"><div class="role-top"><span class="role-number">02</span><span class="role-status">Proposal</span></div><h3>Events</h3><p>Proposed Oct 27–29 date options, an <a href="https://www.tjpa.org/permits-reservations" target="_blank" rel="noopener noreferrer">official Salesforce Park inquiry route</a>, an RSVP description, and invitation copy.</p><div class="role-result"><span>Still open</span><strong>Availability and guest list</strong></div></article>
+          <article class="role-card buyer"><div class="role-top"><span class="role-number">03</span><span class="role-status">Sourced estimate</span></div><h3>Buyer</h3><p>Checked the <a href="https://www.printful.com/custom-water-bottles" target="_blank" rel="noopener noreferrer">Printful catalog</a> for 24 bottles at $20.25–$23.41 each. The product-only estimate is $486.00–$561.84.</p><div class="role-result"><span>Still open</span><strong>Variant, shipping, tax, checkout</strong></div></article>
+          <article class="role-card treasurer"><div class="role-top"><span class="role-number">04</span><span class="role-status">No payment</span></div><h3>Treasurer</h3><p>Recorded the bottle purpose and $486.00–$561.84 product estimate. Nothing was paid for this plan.</p><div class="role-result"><span>Output</span><strong>Budget context without spend</strong></div></article>
+        </div>
+        <p class="flow-boundary"><strong>Review point:</strong> The crew prepared research, drafts, and an estimate. No park reservation, bottle order, payment, or invitation send has been claimed.</p>
       </section>
-      <section class="judge-board" aria-label="Recorded crew activity">
-        <div class="judge-heading"><div><span class="eyebrow">RECORDED WORK</span><h2>What Pengwin recorded</h2><p>Requests, approvals, execution results, and spending carry different labels. Provider status is not refreshed on this page.</p></div><span id="activity-connection" class="activity-connection">Loading activity</span></div>
-        <section class="card historical-containment" aria-label="Historical sandbox containment proof"><div class="card-head"><h3>Saved sandbox containment proof</h3><span>Historical receipt</span></div><div id="judge-containment" class="empty-view">Loading recorded containment proof.</div></section>
+      <section class="judge-board" id="judge-proof" aria-label="Public judge activity">
+        <div class="judge-heading"><div><span class="eyebrow">PUBLIC EVIDENCE</span><h2>What Pengwin recorded</h2><p>A sanitized, read-only activity trail shows which role acted, what it produced, and how estimates differ from actual charges. It does not refresh provider status.</p></div><span id="activity-connection" class="activity-connection">Loading activity</span></div>
         <div class="judge-grid">
           <section class="card judge-activity"><div class="card-head"><h3>Activity and evidence</h3><span>Latest recorded steps</span></div><div id="judge-timeline" class="judge-timeline empty-view">Loading the activity trail.</div></section>
           <div class="judge-stack">
             <section class="card"><h3>Latest task states</h3><div id="judge-runs" class="judge-runs empty-view">Loading task status.</div></section>
-            <section class="card"><h3>Spend, separated by outcome</h3><div id="judge-spend" class="judge-spend empty-view">Loading spending labels.</div></section>
+            <section class="card"><h3>Costs and estimates</h3><div id="judge-spend" class="judge-spend empty-view">Loading spending labels.</div></section>
             <section class="card"><h3>Vultr model usage</h3><div id="judge-model" class="judge-model empty-view">Loading usage count.</div></section>
           </div>
         </div>
       </section>
-      <section class="grid">
+      <section class="sandbox-section" id="sandbox" aria-labelledby="sandbox-title">
+        <div class="section-heading"><div><span class="eyebrow">CHALLENGE 1 · SAFE EXECUTION</span><h2 id="sandbox-title">Prove the crew can run and contain code</h2><p>This separate judge test shows Vultr-generated Python running in a disposable container. You can inspect the code, output, and ten-second timeout result. The code container has no network access or office credentials.</p></div><span class="section-aside">Protected interactive demo</span></div>
+        <section class="card historical-containment" aria-label="Historical sandbox containment proof"><div class="card-head"><h3>Saved timeout proof</h3><span>Recorded result</span></div><div id="judge-containment" class="empty-view">Loading recorded containment proof.</div></section>
+        <div class="sandbox-grid">
+          <section class="controls card" aria-labelledby="controls-title">
+            <div><h3 id="controls-title">Unlock the interactive test</h3><p id="controls-desc">The public proof above needs no token. Enter a private demo token to run a new calculation or inspect the saved trace.</p></div>
+            <div class="auth"><label for="token">Demo or operator token</label><input id="token" type="password" autocomplete="off" placeholder="Private access token"><button id="connect" class="secondary">Connect</button></div>
+            <div class="actions"><button data-flow="berlin-pantry">Berlin pantry</button><button data-flow="welcome-kit">New hire kit + lunch</button><button data-flow="hoodie-attack" class="attack">Company hoodies + attack</button><button id="freeze" class="secondary">Freeze payments</button><button id="reset" class="secondary">Reset demo</button></div>
+            <p id="feedback" role="status" aria-live="polite"></p>
+            <div id="mode" class="mode">Demo access required</div>
+          </section>
+          <section class="card lab" aria-labelledby="lab-title">
+            <div><h3 id="lab-title">Run a plain-English code task</h3><p>Start with a calculation. The timeout example tests the ten-second container limit; inspect the saved result first if you only need the proof.</p></div>
+            <label for="code-goal">Task for the code sandbox</label>
+            <textarea id="code-goal" maxlength="1000" rows="3" placeholder="Calculate 19 plus 23 and show the result."></textarea>
+            <div class="lab-examples" aria-label="Example goals"><span>Examples</span><button type="button" data-code-goal="Calculate 19 plus 23 and print the answer.">Calculation</button><button type="button" data-code-goal="Write and run exactly this Python program, without adding imports, timers, try/except, break, or any other lines: print('Starting', flush=True) followed by while True: pass. This safety test requires the external container's ten-second limit to stop the infinite loop. Do not implement your own timeout.">Timeout containment</button></div>
+            <button id="run-code">Run in sandbox</button>
+            <p id="code-status" role="status" aria-live="polite">Enter a demo token to run a task.</p>
+            <div id="code-attempts"></div>
+          </section>
+        </div>
+      </section>
+      <section class="grid operator-grid" aria-label="Operator controls">
         <div class="card"><div class="card-head"><h2>Live work</h2><span id="connection">○ Locked</span></div><div id="timeline" class="timeline"></div></div>
         <div class="stack">
           <div class="card"><h2>Budgets</h2><div id="budgets"></div></div>
@@ -51,7 +85,7 @@
       </section>
     </main>
     <dialog id="receipt"><form method="dialog"><button class="close" aria-label="Close">×</button></form><div id="receipt-body"></div></dialog>
-    <footer>Fictional people and vendors · Airwallex sandbox or clearly marked simulation only</footer>
+    <footer>Pengwin Crew · Fictional demo organization · No real event booking or physical purchase shown here</footer>
   </div>
 </body>
 </html>

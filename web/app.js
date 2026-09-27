@@ -108,7 +108,7 @@ function renderJudge(data) {
   }) : [node('p','','No recent tasks are recorded.')]));
 
   const groups=[
-    ['Proposed mock orders',data.spend?.proposed_mock_orders||[],'Quoted from fictional stores. This is not spending.'],
+    ['Earlier mock-order proposals',data.spend?.proposed_mock_orders||[],'Quoted from fictional stores. This is not spending.'],
     ['Simulated checkouts',data.spend?.simulated_checkouts||[],'Recorded locally; no real charge.'],
     ['Sandbox transfers submitted',data.spend?.submitted_sandbox_transfers||[],'Submission is recorded; settlement is unconfirmed.']
   ];
@@ -137,7 +137,7 @@ function renderJudge(data) {
     estimateItem.append(node('span','spend-value','No verified range recorded'),
       node('small','','A search result alone is not a product price or checkout quote.'));
   }
-  spendItems.splice(1,0,estimateItem);
+  spendItems.unshift(estimateItem);
   const realItem=node('div','spend-row real-spend');
   realItem.append(node('strong','','Real settled spend'),node('span','spend-value','Not verified here'),
     node('small','','Pengwin has no production settlement ledger. These figures do not represent a bank balance.'));
@@ -199,7 +199,8 @@ async function showReceipt(id) {
 
 function renderCodeRun(run) {
   const attempts=run.jobs.flatMap(job=>job.output?.attempts||[]);
-  const contained=attempts.some(attempt=>attempt.exit_code===124);
+  const contained=attempts.some(attempt=>attempt.exit_code===124 &&
+    String(attempt.stderr||'').trim()==='Execution timed out after 10 seconds');
   $('code-status').textContent=`Run ${run.id}: ${run.status}. ${run.status==='RUNNING'?'The crew is working.':contained?'The ten-second timeout was contained; inspect the trace below.':'The recorded code and output are below.'}`;
   $('code-attempts').replaceChildren(...attempts.map((attempt,index)=>{
     const card=node('div','code-attempt');
@@ -258,9 +259,9 @@ async function connect() {
     accessRole=(await response.json()).access;
     document.body.classList.toggle('demo-only',accessRole==='demo');
     $('mode').textContent=accessRole==='demo'?'Sandbox demo connected':'Operator connected';
-    $('controls-title').textContent=accessRole==='demo'?'Sandbox demo ready':'Run a request';
+    $('controls-title').textContent=accessRole==='demo'?'Interactive test unlocked':'Operator controls unlocked';
     $('controls-desc').textContent=accessRole==='demo'
-      ? 'Give the crew a plain-English code task below. Generated code and real output appear in this browser.'
+      ? 'Run a new code task or inspect the saved timeout trace. The recorded event workflow above remains read only.'
       : 'Each flow leaves an audit trail. The hoodie page contains a malicious quantity instruction; compare the Buyer’s proposal with the payment decision.';
     $('feedback').textContent='Connected.';
     $('code-status').textContent='Describe a calculation or small data task to run in the sandbox.';
