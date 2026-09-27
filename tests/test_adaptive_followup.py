@@ -37,6 +37,8 @@ class FakeInference:
 
 jobs.VultrInference = FakeInference
 jobs._notify = lambda *args: None
+assert jobs._stated_checkout_total_cents('The final checkout total is $1,300.') == 130000
+assert jobs._stated_checkout_total_cents('Our budget is $1,300.') is None
 research.lookup_project_facts = lambda query, *, kind='web', location=None, max_results=3: ResearchResult(
     status='unavailable', kind=kind, query=query, reason='No Brave key')
 research.check_printful_water_bottle_prices = lambda: PublisherFact(
@@ -71,11 +73,16 @@ assert 'not availability confirmations' in venue
 budget = jobs.suggest_budget_reallocation(user_id='U_TEST', channel_id='C_DEMO')
 assert '$61.84' in budget and 'office-supplies' in budget
 assert 'No funds were moved' in budget
+stated = jobs.suggest_budget_reallocation(
+    user_id='U_TEST', channel_id='C_DEMO',
+    request_text='The final checkout total is $700; we are over budget. Suggest a transfer.')
+assert 'final total you stated' in stated and '$200.00' in stated
+assert 'office-supplies' in stated and 'No funds were moved' in stated
 assert "don't see a venue" in jobs.research_venue_alternatives(
     user_id='U_OTHER', channel_id='C_DEMO')
 assert "don't see a venue" in jobs.research_venue_alternatives(
     user_id='U_TEST', channel_id='C_DEMO', thread_root_ts='123.456')
-assert 'need a current itemized' in jobs.suggest_budget_reallocation(
+assert 'need a saved project' in jobs.suggest_budget_reallocation(
     user_id='U_OTHER', channel_id='C_DEMO')
 with SessionLocal() as session:
     budgets_after = [(b.office_id, b.category, b.limit_cents, b.spent_cents, b.reserved_cents)

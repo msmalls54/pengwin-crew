@@ -693,17 +693,35 @@ def _budget_reallocation_proposal(*, high_cents: int | None,
     return room, shortfall, proposal
 
 
+def _stated_checkout_total_cents(request_text: str) -> int | None:
+    """Use a clearly labeled user-stated final total, never infer one from prose."""
+    match = re.search(
+        r"\b(?:checkout|delivered|final|total|quote|cost|price)\b[^$\n]{0,60}"
+        r"\$([1-9]\d{0,5}(?:,\d{3})*(?:\.\d{1,2})?)\b",
+        request_text, re.I,
+    )
+    if not match:
+        return None
+    amount = Decimal(match.group(1).replace(",", ""))
+    return int((amount * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 def suggest_budget_reallocation(*, user_id: str, channel_id: str,
-                                thread_root_ts: str | None = None) -> str:
+                                thread_root_ts: str | None = None,
+                                request_text: str = "") -> str:
     """Compare the saved product estimate with live allocation rows, read-only."""
     facts = _scoped_latest_project(user_id=user_id, channel_id=channel_id,
                                    thread_root_ts=thread_root_ts)
+    if not facts:
+        return "I need a saved project in your thread before I can compare its cost with an allocation. No funds were moved."
     swag = facts.get("swag") if facts else None
     high = swag.get("subtotal_max") if isinstance(swag, dict) else None
-    if high is None or swag.get("currency") != "USD":
+    stated_cents = _stated_checkout_total_cents(request_text)
+    if (stated_cents is None and high is None) or (swag and swag.get("currency") not in {None, "USD"}):
         return ("I need a current itemized USD cost for this project before I can suggest an allocation change. "
                 "No funds were moved.")
-    high_cents = int((Decimal(str(high)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    high_cents = stated_cents or int((Decimal(str(high)) * 100).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP))
     with SessionLocal() as session:
         target = session.execute(select(Budget).where(
             Budget.office_id == "SF", Budget.category == "swag",
@@ -715,17 +733,24 @@ def suggest_budget_reallocation(*, user_id: str, channel_id: str,
             high_cents=high_cents, target=target, other_budgets=others)
     if room is None:
         return "There is no recorded San Francisco swag allocation to compare with this project. No funds were moved."
-    lead = (f"The saved product-only high estimate is ${high_cents / 100:,.2f}; "
+    amount_kind = ("The final total you stated" if stated_cents else
+                   "The saved product-only high estimate")
+    lead = (f"{amount_kind} is ${high_cents / 100:,.2f}; "
             f"the San Francisco swag allocation currently has ${room / 100:,.2f} available. ")
     if not shortfall:
+        if stated_cents:
+            return lead + "That stated total fits. Bring the exact checkout quote for approval. No funds were moved."
         return lead + ("That estimate fits, but shipping and tax or a later quote may change the total. "
                        "Send the exact checkout amount if it is over budget. No funds were moved.")
     if proposal:
+        next_step = ("Bring the exact checkout quote for approval. No funds were moved."
+                     if stated_cents else
+                     "Shipping and tax could increase the amount needed. No funds were moved.")
         return lead + (
             f"It is ${shortfall / 100:,.2f} short. A possible reallocation for review is "
             f"at least ${shortfall / 100:,.2f} from the San Francisco {proposal['from_category']} "
             f"allocation, which has ${proposal['source_available_cents'] / 100:,.2f} uncommitted. "
-            "An authorized person must approve a budget change; this estimate excludes shipping and tax. No funds were moved."
+            "An authorized person must approve a budget change. " + next_step
         )
     return lead + (
         f"It is ${shortfall / 100:,.2f} short, and no other recorded San Francisco allocation "

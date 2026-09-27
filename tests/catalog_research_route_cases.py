@@ -84,5 +84,6 @@ def test_unavailable_venue_and_budget_shortfall_take_read_only_next_steps(monkey
                            thread_ts="100.001", delivery_id="event:budget-gap") == "Budget gap calculated"
     assert calls == [
         ("venue", {"user_id": "U-owner", "channel_id": "C-demo", "thread_root_ts": "100.001"}),
-        ("budget", {"user_id": "U-owner", "channel_id": "C-demo", "thread_root_ts": "100.001"}),
+        ("budget", {"user_id": "U-owner", "channel_id": "C-demo", "thread_root_ts": "100.001",
+                    "request_text": "This is over budget. Suggest a transfer."}),
     ]

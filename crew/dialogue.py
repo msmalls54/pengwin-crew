@@ -283,7 +283,7 @@ def answer(role: str, text: str, *, user_id: str, channel_id: str,
         from .jobs import suggest_budget_reallocation
 
         return suggest_budget_reallocation(user_id=user_id, channel_id=channel_id,
-                                           thread_root_ts=thread_ts)
+                                           thread_root_ts=thread_ts, request_text=text)
     if role in {"Concierge", "Events"}:
         choices = {
             "approve this event": "approve", "approve the event": "approve",
