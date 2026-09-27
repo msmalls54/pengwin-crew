@@ -431,6 +431,11 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
                     f"Exit 0 after {index + 1} attempt(s); code hash {code_hash}. "
                     f"Actual output: {printable}"
                 ), False
+            if exit_code == 124:
+                return {"attempts": attempts}, [], (
+                    f"Run {run.id}: Buyer contained a timed-out Python task in the offline sandbox. "
+                    f"Exit 124; code hash {code_hash}. The container was removed; no retry or provider action was made."
+                ), True
             if index == 0:
                 draft = planner.code_draft(goal=goal, previous_code=draft.code,
                                            stderr=attempts[-1]["stderr"])

@@ -4,6 +4,8 @@
 
 Pengwin lives in the private [`#pengwin-ops` Slack channel](https://app.slack.com/client/T0C4K935FHT/C0C4910LVAB). Mention Concierge for a request that spans the crew, or mention Buyer, Events, or Treasurer directly for their work. Buyer handles product checks and sandboxed Python, Events prepares event drafts, and Treasurer checks purchases against the requested quantity and budget. Each agent reports its work and asks for approval in the same Slack conversation. The small browser lab lets hackathon judges inspect generated code, execution attempts, stdout, and stderr.
 
+**Live judge lab:** [https://104-156-229-63.sslip.io](https://104-156-229-63.sslip.io) (demo token shared privately). [Run the demo](docs/demo-runbook.md) with Slack as the crew's workplace and the browser as execution proof.
+
 **See the executed result:** [Vultr sandbox receipt](docs/sandbox-execution-receipt.md). A live model wrote Python for “Calculate 19 plus 23”; the remote container ran it and returned `42`. A separate infinite loop stopped at the ten-second limit, and no ephemeral containers remained. Pengwin is a fictional software and design firm with offices in San Francisco and Berlin; its stores, people, addresses, and transaction examples are demo data.
 
 The control VM holds the durable task queue, audit trail, budgets and policy checks. A second Vultr VM runs disposable browser and code containers without payment, calendar or Slack credentials. [Talk to the crew](#talk-to-the-crew), [inspect the sandbox receipt](docs/sandbox-execution-receipt.md), or [run locally](#run-locally).

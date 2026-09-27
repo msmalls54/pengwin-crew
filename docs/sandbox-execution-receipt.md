@@ -10,6 +10,8 @@ Checked on September 26, 2026, after deploying the updated control workers and s
 | Container lifecycle | `0` ephemeral containers before and `0` after the three jobs |
 | Live Vultr model to sandbox | Model-generated code hash `8264de697341`, 89 characters; sandbox exit `0`, stdout `42` |
 | Public HTTPS demo to sandbox | Run `526a55d6-811a-40ea-b5c4-9d1d7011cf5f` completed; Vultr wrote `print(19 + 23)` (hash `fcbf27b9835b`); remote sandbox stdout was `42` |
+| Public containment moment | Run `676d9ebf-15e9-4763-9bb7-20343c5b5cf3` held after model-generated `while True: pass` timed out; exit `124`, stderr `Execution timed out after 10 seconds`, code hash `a9800063239f` |
+| Recovery after containment | A later public run `9113d0fa-0b0b-4ecd-822f-b3bcf07d9bcd` completed with result `42`; no ephemeral containers remained on the sandbox VM |
 
 The code task is configured with Docker `network=none`, a read-only root filesystem, a 128 MB `/tmp`, one CPU, 512 MB memory, dropped capabilities, and a non-root UID. No Slack, Vultr, Airwallex, Eventbrite, or Luma credential is passed to the sandbox. The verification ran through the deployed Buyer's remote Docker connection; it did not post to Slack or call a payment or calendar provider.
 

@@ -67,3 +67,46 @@ assert not jobs.run_one_job('Buyer')
     result = subprocess.run([sys.executable, "-c", script], env=env,
                             capture_output=True, text=True, timeout=45)
     assert result.returncode == 0, result.stderr
+
+
+def test_timeout_is_visible_and_is_not_retried(tmp_path):
+    env = os.environ.copy()
+    env.update({
+        "DATABASE_URL": f"sqlite:///{tmp_path / 'timeout.db'}",
+        "PAYMENT_MODE": "simulated", "PLANNER_MODE": "deterministic",
+        "SANDBOX_MODE": "docker", "SLACK_DEMO_CHANNEL_ID": "C_DEMO",
+        "SLACK_ALLOWED_USER_IDS": "U_TEST", "SLACK_ADMIN_USER_IDS": "U_TEST",
+    })
+    script = """
+from crew.inference import CodeDraft
+from crew.seed import seed_demo
+import crew.jobs as jobs
+
+seed_demo(reset=True)
+messages = []
+jobs._notify = lambda run_id, role, message: messages.append((role, message))
+class FakeInference:
+    def code_draft(self, *, goal, previous_code='', stderr=''):
+        assert not previous_code, 'Timeout must not trigger a repair attempt'
+        return CodeDraft(code='while True: pass')
+jobs.VultrInference = FakeInference
+calls = []
+class FakeSandbox:
+    def execute_code(self, code, inputs):
+        calls.append(code)
+        return {'exit_code': 124, 'stdout': '', 'stderr': 'Execution timed out after 10 seconds'}
+jobs.sandbox = lambda: FakeSandbox()
+run_id = jobs.submit_run('code-task', source_user='U_TEST', channel_id='C_DEMO',
+                         request_text='Run an infinite loop')
+assert jobs.run_one_job('Concierge')
+assert jobs.run_one_job('Buyer')
+run = jobs.get_run(run_id)
+assert run['status'] == 'HELD', run
+assert len(calls) == 1
+assert run['jobs'][-1]['output']['attempts'][0]['exit_code'] == 124
+assert 'timed out' in run['jobs'][-1]['output']['attempts'][0]['stderr']
+assert any('contained a timed-out Python task' in message for _, message in messages)
+"""
+    result = subprocess.run([sys.executable, "-c", script], env=env,
+                            capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, result.stderr
