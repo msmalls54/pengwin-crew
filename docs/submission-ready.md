@@ -1,6 +1,6 @@
-# Challenge 1 submission fields
+# Challenge 1 submission receipt and fields
 
-Prepared September 27, 2026. The signed-in organizer portal is https://cerebralvalley.ai/e/vultr-the-agent-arena/hackathon/submit . Its guide says submissions are due at **12:00 p.m. PDT September 27**. This file prepares the fields; it is not a submission receipt.
+Submitted September 27, 2026 at about 2:52 a.m. PDT (09:52 UTC) through the signed-in organizer form at https://cerebralvalley.ai/e/vultr-the-agent-arena/hackathon/submit . The form showed **“Project submitted successfully!”** and navigated to [Your Submission](https://cerebralvalley.ai/e/vultr-the-agent-arena/hackathon/projects), where **Pengwin Crew** and the GitHub, video, slides, live URL, Challenge 1 category, and other fields below were visible. The organizer page did not display an immutable submission ID. Its guide says submissions are due at **12:00 p.m. PDT September 27**.
 
 | Field | Entry |
 | --- | --- |
