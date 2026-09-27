@@ -13,6 +13,7 @@ import os
 import re
 import time
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -595,7 +596,140 @@ def _supersede_prior_handoffs(project_id: str, *, current_run_id: str) -> None:
                        request_id=handoff.run_id, detail={"project_revision": current_run_id})
 
 
-def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
+def _venue_reported_unavailable(request_text: str, venue: str | None) -> bool:
+    """Only a current user report can trigger replacement research."""
+    if not venue or not request_text:
+        return False
+    text = request_text.casefold()
+    subject = rf"(?:{re.escape(venue.casefold())}|the\s+venue|that\s+venue|the\s+place|that\s+place)"
+    return bool(re.search(
+        rf"\b{subject}\b\s+"
+        r"(?:(?:is|was)\s+(?:unavailable|booked|closed)|"
+        r"(?:isn't|is\s+not|wasn't|was\s+not)\s+available|"
+        r"(?:can't|cannot|couldn't)\s+host|has\s+no\s+availability)\b", text,
+    ) or re.search(
+        r"\bvenue\s+unavailable\b", text,
+    ))
+
+
+def _scoped_latest_project(*, user_id: str, channel_id: str,
+                           thread_root_ts: str | None = None) -> dict | None:
+    """An unknown thread cannot silently fall back to a different project."""
+    from .memory import latest_project_facts
+
+    facts = latest_project_facts(user_id=user_id, channel_id=channel_id,
+                                 thread_root_ts=thread_root_ts)
+    if not facts or not thread_root_ts:
+        return facts
+    from .db import CrewProject
+
+    with SessionLocal() as session:
+        exact = session.execute(select(CrewProject.id).where(
+            CrewProject.id == facts["project_id"],
+            CrewProject.owner_user_id == user_id,
+            CrewProject.channel_id == channel_id,
+            CrewProject.thread_root_ts == thread_root_ts,
+        )).scalar_one_or_none()
+    return facts if exact else None
+
+
+def research_venue_alternatives(*, user_id: str, channel_id: str,
+                                thread_root_ts: str | None = None) -> str:
+    """Search fresh leads for a saved venue; no project or provider writes."""
+    from .research import event_venue_queries, lookup_project_facts
+
+    facts = _scoped_latest_project(user_id=user_id, channel_id=channel_id,
+                                   thread_root_ts=thread_root_ts)
+    event = facts.get("event") if facts else None
+    venue = event.get("venue") if isinstance(event, dict) else None
+    if not venue:
+        return "I don't see a venue in your saved project for this thread. Tell me the city and event size, and I'll search alternatives."
+    _, public_location, _ = event_venue_queries(venue)
+    if not public_location:
+        return (f"I have {venue} in the saved plan, but no verified city. "
+                "Tell me the city so I can search alternatives without sending private venue details to a search provider.")
+    search = lookup_project_facts("event venues", kind="place",
+                                  location=public_location, max_results=5)
+    leads = ([lead for lead in search.results
+              if lead.url and venue.casefold() not in lead.title.casefold()][:3]
+             if search.status == "ok" else [])
+    lines = [f"You said {venue} may not work. I searched for replacement venue leads near {public_location}."]
+    if leads:
+        lines.extend(f"{lead.title}: {lead.url}" for lead in leads)
+        lines.append("Next: Check each venue's date, capacity, access, and exact price before choosing one.")
+    elif search.status != "ok":
+        lines.append("Live venue search is unavailable right now, so I cannot give current alternatives.")
+    else:
+        lines.append("The search returned no usable alternatives. Give me a different area or event size to try.")
+    lines.append("These are search leads, not availability confirmations. No reservation or invitation was sent.")
+    return "\n".join(lines)[:2_000]
+
+
+def _budget_reallocation_proposal(*, high_cents: int | None,
+                                  target: Budget | None,
+                                  other_budgets: list[Budget]) -> tuple[int | None, int | None, dict | None]:
+    """Compute an approval-only transfer idea from current same-office records."""
+    room = max(0, target.limit_cents - target.spent_cents - target.reserved_cents) if target else None
+    shortfall = high_cents - room if high_cents is not None and room is not None and high_cents > room else None
+    eligible = sorted(
+        (entry for entry in other_budgets
+         if entry.office_id == target.office_id
+         and entry.category != target.category
+         and entry.limit_cents - entry.spent_cents - entry.reserved_cents >= (shortfall or 0)),
+        key=lambda entry: (-(entry.limit_cents - entry.spent_cents - entry.reserved_cents), entry.category),
+    ) if shortfall and target else []
+    source = eligible[0] if eligible else None
+    proposal = ({
+        "from_office": source.office_id, "from_category": source.category,
+        "to_category": target.category, "minimum_cents": shortfall,
+        "source_available_cents": source.limit_cents - source.spent_cents - source.reserved_cents,
+        "status": "PROPOSED_ONLY", "approval_required": True,
+    } if source else None)
+    return room, shortfall, proposal
+
+
+def suggest_budget_reallocation(*, user_id: str, channel_id: str,
+                                thread_root_ts: str | None = None) -> str:
+    """Compare the saved product estimate with live allocation rows, read-only."""
+    facts = _scoped_latest_project(user_id=user_id, channel_id=channel_id,
+                                   thread_root_ts=thread_root_ts)
+    swag = facts.get("swag") if facts else None
+    high = swag.get("subtotal_max") if isinstance(swag, dict) else None
+    if high is None or swag.get("currency") != "USD":
+        return ("I need a current itemized USD cost for this project before I can suggest an allocation change. "
+                "No funds were moved.")
+    high_cents = int((Decimal(str(high)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    with SessionLocal() as session:
+        target = session.execute(select(Budget).where(
+            Budget.office_id == "SF", Budget.category == "swag",
+        )).scalar_one_or_none()
+        others = session.execute(select(Budget).where(
+            Budget.office_id == "SF", Budget.category != "swag",
+        )).scalars().all()
+        room, shortfall, proposal = _budget_reallocation_proposal(
+            high_cents=high_cents, target=target, other_budgets=others)
+    if room is None:
+        return "There is no recorded San Francisco swag allocation to compare with this project. No funds were moved."
+    lead = (f"The saved product-only high estimate is ${high_cents / 100:,.2f}; "
+            f"the San Francisco swag allocation currently has ${room / 100:,.2f} available. ")
+    if not shortfall:
+        return lead + ("That estimate fits, but shipping and tax or a later quote may change the total. "
+                       "Send the exact checkout amount if it is over budget. No funds were moved.")
+    if proposal:
+        return lead + (
+            f"It is ${shortfall / 100:,.2f} short. A possible reallocation for review is "
+            f"at least ${shortfall / 100:,.2f} from the San Francisco {proposal['from_category']} "
+            f"allocation, which has ${proposal['source_available_cents'] / 100:,.2f} uncommitted. "
+            "An authorized person must approve a budget change; this estimate excludes shipping and tax. No funds were moved."
+        )
+    return lead + (
+        f"It is ${shortfall / 100:,.2f} short, and no other recorded San Francisco allocation "
+        "can cover that shortfall alone. Reduce the quantity or request an approved budget increase. No funds were moved."
+    )
+
+
+def _project_event_work(run: CrewRun, plan_data: dict,
+                        request_text: str = "") -> tuple[dict, str]:
     from .project_planner import ProjectPlan
     from .research import event_venue_queries, lookup_project_facts
 
@@ -603,6 +737,7 @@ def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
     event = plan.event
     title = event.title if event else plan.name
     venue = event.venue_name if event else None
+    venue_unavailable = _venue_reported_unavailable(request_text, venue)
     date_phrase = event.date_phrase if event else None
     time_phrase = event.time_phrase if event else None
     audience = plan.invitations.audience_phrase if plan.invitations else None
@@ -612,17 +747,20 @@ def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
         options = [(local_day + timedelta(days=offset)).isoformat() for offset in (0, 1, 2)]
     draft_title = title if title != "Event" else "an event"
     draft_date = "[select a date option]" if options else (date_phrase or "[date]")
+    draft_venue = "[replacement venue]" if venue_unavailable else (venue or "[venue]")
     description = (
-        f"Join us for {draft_title} at {venue or '[venue]'}. "
+        f"Join us for {draft_title} at {draft_venue}. "
         f"Date: {draft_date}. Time: {time_phrase or '[start time]'}. "
         "RSVP details will be added after the schedule and venue are confirmed."
     )
     invite_copy = (
-        f"You're invited to {draft_title} at {venue or '[venue]'}. "
+        f"You're invited to {draft_title} at {draft_venue}. "
         f"Date: {draft_date}. Time: {time_phrase or '[start time]'}. "
         "RSVP: [approved registration link]."
     )
     venue_search = None
+    alternative_search = None
+    alternative_leads: list[dict[str, str]] = []
     route_search = None
     official_route = None
     if venue and re.fullmatch(r"(?:the\s+)?salesforce park", venue.strip(), re.I):
@@ -637,12 +775,33 @@ def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
         }
     if venue:
         place_query, public_location, route_query = event_venue_queries(venue)
-        venue_search = lookup_project_facts(
-            place_query, kind="place", location=public_location, max_results=2,
-        )
-        route_search = lookup_project_facts(route_query, kind="web", max_results=2)
+        if venue_unavailable:
+            alternative_search = lookup_project_facts(
+                "event venues", kind="place", location=public_location, max_results=5,
+            )
+            if alternative_search.status == "ok":
+                alternative_leads = [
+                    {"title": lead.title, "url": lead.url}
+                    for lead in alternative_search.results
+                    if lead.url and venue.casefold() not in lead.title.casefold()
+                ][:3]
+        else:
+            venue_search = lookup_project_facts(
+                place_query, kind="place", location=public_location, max_results=2,
+            )
+            route_search = lookup_project_facts(route_query, kind="web", max_results=2)
     event_label = f"{title} at {venue}" if venue and venue.casefold() not in title.casefold() else (venue or title)
-    lines = [f"Event plan ready: {event_label}."]
+    lines = ([f"Event plan needs a new venue: {title}."] if venue_unavailable else
+             [f"Event plan ready: {event_label}."])
+    if venue_unavailable:
+        lines.append(f"You reported {venue} unavailable. I am treating it as ruled out for this plan; I have not independently confirmed availability.")
+        if alternative_leads:
+            lines.append("Replacement venue leads to contact (availability and fit unconfirmed): "
+                         + " | ".join(f"{lead['title']}: {lead['url']}" for lead in alternative_leads))
+        elif alternative_search and alternative_search.status != "ok":
+            lines.append("Live replacement venue search is unavailable; I cannot name a current alternative.")
+        else:
+            lines.append("No usable replacement venue leads were found in this search.")
     if options:
         labels = [f"{date.fromisoformat(value):%a %b} {date.fromisoformat(value).day}, {date.fromisoformat(value).year}" for value in options]
         lines.append("Date options: " + ", ".join(labels) + ".")
@@ -656,7 +815,7 @@ def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
         leads = [f"{lead.title}: {lead.url}" for lead in route_search.results if lead.url]
         if leads:
             lines.append("Reservation leads: " + " | ".join(leads[:2]))
-    if official_route:
+    if official_route and not venue_unavailable:
         lines.append(
             "Official Salesforce Park permit inquiry (TJPA; checked 2026-09-27): "
             + official_route["url"]
@@ -683,23 +842,30 @@ def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
         needed.append("start time and duration")
     if event and event.capacity is None:
         needed.append("RSVP capacity")
-    if not venue:
+    if venue_unavailable:
+        needed.append("a replacement venue after checking its availability, capacity, and price")
+    elif not venue:
         needed.append("venue and city")
     if plan.invitations and not audience:
         needed.append("target audience")
     if needed:
         lines.append("Next: Confirm " + ", ".join(needed) + ".")
-    status = "Status: venue availability unconfirmed; no reservation has been requested or Eventbrite page published"
+    status = ("Status: replacement venue availability unconfirmed" if venue_unavailable else
+              "Status: venue availability unconfirmed")
+    status += "; no reservation has been requested or Eventbrite page published"
     if plan.invitations:
         status += "; invitations have not been sent"
     lines.append(status + ".")
     output = {
-        "venue_status": "UNCONFIRMED", "eventbrite_status": "NOT_CREATED",
+        "venue_status": "REPORTED_UNAVAILABLE" if venue_unavailable else "UNCONFIRMED",
+        "alternative_venue_leads": alternative_leads,
+        "alternative_research_status": alternative_search.status if alternative_search else "not_requested",
+        "eventbrite_status": "NOT_CREATED",
         "invitation_status": "DRAFT_ONLY", "date_options": options,
         "description_draft": description,
         "invitation_draft": invite_copy if plan.invitations else None,
         "research_status": (venue_search.status if venue_search else "not_requested"),
-        "official_reservation_route": official_route,
+        "official_reservation_route": None if venue_unavailable else official_route,
     }
     return output, "\n".join(lines)[:3000]
 
@@ -772,26 +938,37 @@ def _project_budget_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
         budget = session.execute(select(Budget).where(
             Budget.office_id == "SF", Budget.category == "swag",
         )).scalar_one_or_none()
+        other_budgets = session.execute(select(Budget).where(
+            Budget.office_id == "SF", Budget.category != "swag",
+        )).scalars().all()
         sourced = session.execute(select(AgentJob).where(
             AgentJob.run_id == run.id,
             AgentJob.kind == "product_source", AgentJob.status == "DONE",
         ).order_by(AgentJob.created_at.desc()).limit(1)).scalar_one_or_none()
         source_output = json.loads(sourced.output_json) if sourced else {}
-    room_cents = max(0, budget.limit_cents - budget.spent_cents - budget.reserved_cents) if budget else None
     low = source_output.get("subtotal_min")
     high = source_output.get("subtotal_max")
-    over_budget = bool(room_cents is not None and high is not None and high * 100 > room_cents)
+    high_cents = (int((Decimal(str(high)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+                  if high is not None else None)
+    room_cents, shortfall_cents, reallocation = _budget_reallocation_proposal(
+        high_cents=high_cents, target=budget, other_budgets=other_budgets)
+    over_budget = shortfall_cents is not None
     output = {
         "reason": reason, "review_status": "ESTIMATE_ONLY", "product_subtotal_min": low,
         "product_subtotal_max": high, "currency": "USD" if high is not None else None,
         "internal_demo_budget_room_cents": room_cents, "over_internal_budget": over_budget,
+        "reallocation_proposal": reallocation,
         "payment_status": "NONE", "reserved_cents": 0,
     }
     lines = [f"Budget review recorded for {reason}."]
     if high is not None:
         lines.append(f"Product estimate: ${low:.2f}–${high:.2f}, before shipping and tax.")
         if over_budget:
-            lines.append(f"Recorded swag allocation has ${room_cents / 100:,.2f} available; the high estimate exceeds it. Reduce the quantity or revise the allocation.")
+            lines.append(f"Recorded swag allocation has ${room_cents / 100:,.2f} available; the high product-only estimate exceeds it by ${shortfall_cents / 100:,.2f}.")
+            if reallocation:
+                lines.append(f"Possible reallocation for review: move at least ${shortfall_cents / 100:,.2f} from the San Francisco {reallocation['from_category']} allocation, which currently has ${reallocation['source_available_cents'] / 100:,.2f} uncommitted, to swag. This needs an authorized budget decision; I have not moved funds. Shipping and tax could increase the amount needed.")
+            else:
+                lines.append("No other recorded San Francisco allocation can cover that shortfall alone. Consider a smaller quantity or request an approved budget increase. I have not moved funds.")
         elif room_cents is None:
             lines.append("There is no recorded swag allocation to compare against this estimate.")
         else:
@@ -848,7 +1025,9 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
                 _supersede_prior_handoffs(project_id, current_run_id=run.id)
             successors: list[tuple[str, str, dict]] = []
             if plan.event is not None or plan.invitations is not None:
-                successors.append(("Events", "event_research", {"plan": plan_data}))
+                successors.append(("Events", "event_research", {
+                    "plan": plan_data, "request_text": request_text,
+                }))
             if plan.swag is not None:
                 successors.append(("Buyer", "product_source", {"plan": plan_data}))
             successors.append(("Treasurer", "budget_review", {"plan": plan_data}))
@@ -917,7 +1096,7 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
         output, message = _eventbrite_status_reply(run, data.get("question", ""))
         return output, [], message, False
     if job.role == "Events" and job.kind == "event_research":
-        output, message = _project_event_work(run, data["plan"])
+        output, message = _project_event_work(run, data["plan"], data.get("request_text", ""))
         return output, [], message, False
     if job.role == "Buyer" and job.kind == "product_source":
         output, message = _project_product_work(run, data["plan"])

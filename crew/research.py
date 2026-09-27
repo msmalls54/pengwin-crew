@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html
 import ipaddress
+import json
 import re
 from datetime import datetime, timezone
 from typing import Literal
@@ -89,6 +90,202 @@ class PublisherFact(BaseModel):
     min_price: float | None = None
     max_price: float | None = None
     note: str = ""
+
+
+class CatalogProduct(BaseModel):
+    """Read-only Printful blank-product facts, not a purchasable quote."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: int = Field(gt=0)
+    title: str = Field(min_length=1, max_length=160)
+    brand: str | None = Field(default=None, max_length=80)
+    model: str | None = Field(default=None, max_length=80)
+    source_url: str
+    colors: list[str] = Field(default_factory=list, max_length=50)
+    sizes: list[str] = Field(default_factory=list, max_length=30)
+    currency: Literal["USD"] | None = None
+    min_price: float | None = None
+    max_price: float | None = None
+    variant_count: int = Field(ge=0)
+    checked_at: datetime
+
+
+class CatalogResearchResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["ok", "unavailable", "error"]
+    query: str = Field(max_length=220)
+    products: list[CatalogProduct] = Field(default_factory=list, max_length=3)
+    searched_at: datetime | None = None
+    reason: str | None = Field(default=None, max_length=160)
+
+
+_CATALOG_STOP_WORDS = frozenset({
+    "a", "about", "all", "also", "and", "are", "at", "available", "be", "buy",
+    "can", "catalog", "check", "color", "colors", "colour", "colours", "could",
+    "cost", "do", "else", "find", "for", "from", "get", "have", "how", "i", "in",
+    "instead", "is", "item", "items", "look", "me", "of", "option", "options",
+    "or", "our", "outside", "price", "prices", "product", "products", "research",
+    "search", "show", "size", "sizes", "the", "their", "there", "these", "to",
+    "up", "us", "variant", "variants", "we", "what", "which", "with", "would",
+    "you", "your",
+})
+
+
+def _catalog_tokens(value: str) -> list[str]:
+    tokens = []
+    for raw in re.findall(r"[a-z0-9]+", value.casefold()):
+        token = {"hoodies": "hoodie", "tees": "shirt", "tshirts": "shirt"}.get(raw, raw)
+        if token.endswith("ies") and len(token) > 4:
+            token = token[:-3] + "y"
+        elif token.endswith("s") and len(token) > 4 and not token.endswith("ss"):
+            token = token[:-1]
+        if token not in _CATALOG_STOP_WORDS and len(token) > 1:
+            tokens.append(token)
+    return tokens
+
+
+def _catalog_query_terms(query: str) -> list[str]:
+    # A later alternative supersedes an earlier item: "water bottles? what about hoodies".
+    alternatives = list(re.finditer(r"\b(?:what about|how about|instead of|rather than)\b", query, re.I))
+    if alternatives:
+        later = _catalog_tokens(query[alternatives[-1].end():])
+        if later:
+            return later[:8]
+    return _catalog_tokens(query)[:8]
+
+
+def _catalog_label(value: object, limit: int) -> str:
+    """Keep publisher labels readable without Slack mentions or markup."""
+    cleaned = _clean_text(value, limit)
+    cleaned = re.sub(r"[^A-Za-z0-9 .,&+()'’|/\-×″]", " ", cleaned)
+    return " ".join(cleaned.split())[:limit]
+
+
+def _printful_json(url: str, *, max_bytes: int) -> dict:
+    """Fetch only fixed Printful catalog paths with a strict response limit."""
+    if url != "https://api.printful.com/products" and not re.fullmatch(
+        r"https://api\.printful\.com/products/[1-9]\d{0,6}", url
+    ):
+        raise ValueError("Unsupported catalog URL")
+    with httpx.stream("GET", url, timeout=15, follow_redirects=False,
+                      headers={"User-Agent": "PengwinCrew/1.0 catalog-research"}) as response:
+        response.raise_for_status()
+        chunks = []
+        size = 0
+        for chunk in response.iter_bytes():
+            size += len(chunk)
+            if size > max_bytes:
+                raise ValueError("Catalog response is too large")
+            chunks.append(chunk)
+    payload = json.loads(b"".join(chunks))
+    if not isinstance(payload, dict) or payload.get("code") != 200:
+        raise ValueError("Unexpected catalog response")
+    return payload
+
+
+def _catalog_product(payload: dict, expected_id: int) -> CatalogProduct:
+    result = payload.get("result")
+    product = result.get("product") if isinstance(result, dict) else None
+    variants = result.get("variants") if isinstance(result, dict) else None
+    if (not isinstance(product, dict) or product.get("id") != expected_id
+            or not isinstance(variants, list) or len(variants) > 1000):
+        raise ValueError("Unexpected product details")
+    title = _catalog_label(product.get("title"), 160)
+    if not title:
+        raise ValueError("Product title is missing")
+    colors = sorted({label for variant in variants if isinstance(variant, dict)
+                     and variant.get("product_id") == expected_id
+                     for label in [_catalog_label(variant.get("color"), 40)]
+                     if label})[:50]
+    sizes = sorted({label for variant in variants if isinstance(variant, dict)
+                    and variant.get("product_id") == expected_id
+                    for label in [_catalog_label(variant.get("size"), 30)]
+                    if label})[:30]
+    prices = []
+    for variant in variants:
+        if not isinstance(variant, dict) or variant.get("product_id") != expected_id:
+            continue
+        try:
+            price = float(variant.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if 0 < price < 10000:
+            prices.append(price)
+    currency = product.get("currency")
+    return CatalogProduct(
+        id=expected_id, title=title,
+        brand=_catalog_label(product.get("brand"), 80) or None,
+        model=_catalog_label(product.get("model"), 80) or None,
+        source_url=f"https://api.printful.com/products/{expected_id}",
+        colors=colors, sizes=sizes, currency="USD" if currency == "USD" else None,
+        min_price=min(prices) if prices and currency == "USD" else None,
+        max_price=max(prices) if prices and currency == "USD" else None,
+        variant_count=len(variants), checked_at=datetime.now(timezone.utc),
+    )
+
+
+def lookup_printful_catalog(query: str, *, max_products: int = 3) -> CatalogResearchResult:
+    """Find matching blank products and check variants against Printful's API.
+
+    Searches only Printful's catalog, and never checks a cart, shipping, tax,
+    artwork, or event-specific inventory. No user text is sent to Printful.
+    """
+    if not 1 <= max_products <= 3:
+        raise ValueError("max_products must be from 1 to 3")
+    query = " ".join(query.split())
+    if (not query or len(query) > 220 or _contains_private_contact(query)):
+        return CatalogResearchResult(status="unavailable", query="[withheld]",
+                                     reason="Request contains personal details or is too long")
+    terms = _catalog_query_terms(query)
+    if not terms:
+        return CatalogResearchResult(status="unavailable", query=query,
+                                     reason="Name a product to search the Printful catalog")
+    try:
+        listing = _printful_json("https://api.printful.com/products", max_bytes=2_500_000)
+        entries = listing.get("result")
+        if not isinstance(entries, list) or len(entries) > 2000:
+            raise ValueError("Unexpected catalog listing")
+        matches = []
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("is_discontinued") is True:
+                continue
+            product_id = entry.get("id")
+            if not isinstance(product_id, int) or not 0 < product_id < 10_000_000:
+                continue
+            title = str(entry.get("title") or "")
+            haystack = set(_catalog_tokens(" ".join(str(entry.get(key) or "")
+                                                     for key in ("title", "type_name", "brand", "model"))))
+            overlap = sum(term in haystack for term in terms)
+            if not overlap:
+                continue
+            # Favor a specific model or multi-word match; preserve provider order on ties.
+            variant_count = entry.get("variant_count")
+            if not isinstance(variant_count, int) or variant_count < 0:
+                variant_count = 0
+            score = (overlap / len(set(terms)), overlap,
+                     sum(term in _catalog_tokens(title) for term in terms),
+                     variant_count)
+            matches.append((score, product_id))
+        matches.sort(key=lambda item: item[0], reverse=True)
+        if not matches:
+            return CatalogResearchResult(status="unavailable", query=query,
+                                         searched_at=datetime.now(timezone.utc),
+                                         reason="No matching Printful catalog product")
+        products = []
+        for _, product_id in matches[:max_products]:
+            try:
+                details = _printful_json(f"https://api.printful.com/products/{product_id}",
+                                         max_bytes=800_000)
+                products.append(_catalog_product(details, product_id))
+            except (httpx.HTTPError, ValueError, TypeError):
+                continue
+        if not products:
+            raise ValueError("Matching product details unavailable")
+        return CatalogResearchResult(status="ok", query=query, products=products,
+                                     searched_at=datetime.now(timezone.utc))
+    except (httpx.HTTPError, ValueError, TypeError):
+        return CatalogResearchResult(status="error", query=query,
+                                     reason="Printful catalog could not be checked")
 
 
 def _clean_text(value: object, limit: int) -> str:

@@ -15,7 +15,7 @@ from .db import Payment, SessionLocal
 from .inference import VultrInference
 from .project_planner import (SourcingProposal, generic_sourcing_proposal,
                               is_multi_part_project_request, user_request_source)
-from .research import ResearchResult, lookup_project_facts
+from .research import ResearchResult, lookup_printful_catalog, lookup_project_facts
 from .slack_bot import (FLOW_COMMANDS, latest_run_status_text, queue_allowed_flow,
                         run_status_text, status_text)
 
@@ -163,6 +163,72 @@ def _external_research_query(text: str) -> tuple[str, str] | None:
     return None
 
 
+def _catalog_research_request(text: str, context: str) -> bool:
+    """Recognize read-only shopping questions before purchase routing or chat."""
+    if re.search(r"\b(?:order|buy|purchase|pay|checkout)\s+\d+\b", text, re.I):
+        return False
+    if not re.search(
+        r"\b(?:look up|search|research|find|check|compare|show|what|which|colors?|colou?rs?|colr|sizes?|options?|available)\b",
+        text, re.I,
+    ):
+        return False
+    if re.search(r"\b(?:hoodies?|sweatshirts?|bottles?|shirts?|mugs?|totes?|hats?|swag|merch|products?|catalog)\b", text, re.I):
+        return True
+    if re.search(r"\b(?:colors?|colou?rs?|colr|sizes?|options?)\b", text, re.I):
+        prior_users = [line[5:].strip() for line in context.splitlines() if line.startswith("USER:")]
+        return bool(prior_users and re.search(
+            r"\b(?:hoodies?|sweatshirts?|bottles?|shirts?|mugs?|totes?|hats?)\b",
+            prior_users[-1], re.I,
+        ))
+    return False
+
+
+def _catalog_research_reply(query: str, context: str = "") -> str:
+    """Report checked catalog facts and a concrete choice, not another offer to search."""
+    if not re.search(r"\b(?:hoodies?|sweatshirts?|bottles?|shirts?|mugs?|totes?|hats?)\b", query, re.I):
+        prior_users = [line[5:].strip() for line in context.splitlines() if line.startswith("USER:")]
+        if prior_users:
+            product = re.search(r"\b(?:hoodies?|sweatshirts?|bottles?|shirts?|mugs?|totes?|hats?)\b",
+                                prior_users[-1], re.I)
+            if product:
+                query = f"{query} for {product.group(0)}"
+    result = lookup_printful_catalog(query, max_products=2)
+    if result.status != "ok" or not result.products:
+        return "I checked the Printful catalog, but it did not return a usable product match. Tell me the product style or brand and I'll narrow the search."
+    color_question = bool(re.search(r"\b(?:colors?|colou?rs?|colr)\b", query, re.I))
+    lines = []
+    for product in result.products:
+        line = f"I checked Printful's {product.title}."
+        if color_question and product.colors:
+            line += " Catalog colors: " + ", ".join(product.colors) + "."
+        else:
+            if product.colors:
+                line += f" {len(product.colors)} catalog colors."
+            if product.sizes:
+                line += " Sizes: " + ", ".join(product.sizes[:10]) + "."
+            if product.min_price is not None and product.max_price is not None:
+                line += f" Listed variants: ${product.min_price:.2f}–${product.max_price:.2f}."
+        line += " " + product.source_url
+        lines.append(line)
+    lines.append("Next: choose a style and color, then tell me the sizes, quantity, and office so I can prepare the right quote.")
+    return "\n".join(lines)[:1500]
+
+
+def _wants_venue_alternatives(text: str) -> bool:
+    return bool(
+        re.search(r"\b(?:venue|location|park|restaurant|space|room)\b", text, re.I)
+        and re.search(r"\b(?:unavailable|not\s+available|booked|closed|other|alternatives?|backup|different|else|replace)\b", text, re.I)
+    )
+
+
+def _wants_budget_reallocation(text: str) -> bool:
+    return bool(
+        re.search(r"\b(?:over\s+budget|exceeds?\s+(?:the\s+)?budget|budget\s+shortfall)\b", text, re.I)
+        or (re.search(r"\b(?:budget|allocation)\b", text, re.I)
+            and re.search(r"\b(?:transfer|reallocat\w*|move|shift)\b", text, re.I))
+    )
+
+
 def _search_context(result: ResearchResult) -> str:
     if result.status != "ok":
         return "Live search unavailable; current external facts remain unverified."
@@ -208,6 +274,16 @@ def answer(role: str, text: str, *, user_id: str, channel_id: str,
         return "Keep the request under 1,000 characters so I can handle it cleanly."
     lower = text.lower()
     decision = lower.strip(" .!")
+    if role in {"Concierge", "Events"} and _wants_venue_alternatives(text):
+        from .jobs import research_venue_alternatives
+
+        return research_venue_alternatives(user_id=user_id, channel_id=channel_id,
+                                           thread_root_ts=thread_ts)
+    if role == "Treasurer" and _wants_budget_reallocation(text):
+        from .jobs import suggest_budget_reallocation
+
+        return suggest_budget_reallocation(user_id=user_id, channel_id=channel_id,
+                                           thread_root_ts=thread_ts)
     if role in {"Concierge", "Events"}:
         choices = {
             "approve this event": "approve", "approve the event": "approve",
@@ -248,6 +324,8 @@ def answer(role: str, text: str, *, user_id: str, channel_id: str,
     if role in {"Concierge", "Events"} and is_multi_part_project_request(text, context):
         return queue_allowed_flow("project-plan", user_id=user_id, channel_id=channel_id,
                                   delivery_id=delivery_id, request_text=text, context=context)
+    if role in {"Concierge", "Buyer"} and _catalog_research_request(text, context):
+        return _catalog_research_reply(text, context)
     if role in {"Concierge", "Buyer"}:
         sourcing = generic_sourcing_proposal(text)
         if sourcing:
