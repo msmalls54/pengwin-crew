@@ -40,6 +40,29 @@ class CodeDraft(BaseModel):
     code: str = Field(min_length=1, max_length=10_000)
 
 
+def _model_json_object(content: object) -> dict:
+    """Accept a JSON object even when a model adds prose or Markdown fencing.
+
+    The caller still validates the exact typed schema and independently checks
+    any proposed action against the user's words before queueing work.
+    """
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("Model response did not contain a JSON object")
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        start = content.find("{")
+        if start < 0:
+            raise ValueError("Model response did not contain a JSON object") from None
+        try:
+            parsed, _ = json.JSONDecoder().raw_decode(content[start:])
+        except json.JSONDecodeError as exc:
+            raise ValueError("Model response did not contain a complete JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Model response was not a JSON object")
+    return parsed
+
+
 def reserve_inference_call() -> None:
     """Count attempted paid calls before dispatch, including timeouts and parse retries."""
     with SessionLocal.begin() as session:
@@ -153,15 +176,17 @@ class VultrInference:
         )
         user = json.dumps({"recent_chat": context[:2000], "request": request_text[:1000]})
         last_error: Exception | None = None
-        for attempt in range(2):
+        for attempt in range(3):
             reserve_inference_call()
-            prompt = user if attempt == 0 else user + "\nReturn the complete JSON object with the exact required keys."
+            prompt = (user if attempt == 0 else user +
+                      "\nReturn one complete JSON object with the exact required keys. "
+                      "No Markdown fence or explanation.")
             response = httpx.post(
                 f"{self.BASE}/chat/completions",
                 headers={"Authorization": f"Bearer {self.key}"},
                 json={"model": self.model, "messages": [
                     {"role": "system", "content": system}, {"role": "user", "content": prompt},
-                ], "temperature": 0, "max_tokens": 1100},
+                ], "temperature": 0, "max_tokens": 1400},
                 timeout=45,
             )
             response.raise_for_status()
@@ -173,7 +198,7 @@ class VultrInference:
                                    if key in {"prompt_tokens", "completion_tokens", "total_tokens"}
                                    and isinstance(value, int) and value >= 0}
             try:
-                return ProjectPlan.model_validate_json(content)
+                return ProjectPlan.model_validate(_model_json_object(content))
             except (ValidationError, ValueError, TypeError) as exc:
                 last_error = exc
         raise ValueError("Vultr model did not return valid ProjectPlan JSON") from last_error
@@ -320,7 +345,7 @@ class VultrInference:
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
             try:
-                return CodeDraft.model_validate_json(content)
-            except ValidationError as exc:
+                return CodeDraft.model_validate(_model_json_object(content))
+            except (ValidationError, ValueError, TypeError) as exc:
                 last_error = exc
         raise ValueError("Vultr model did not return valid CodeDraft JSON") from last_error

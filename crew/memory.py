@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 from contextvars import ContextVar, Token
@@ -278,6 +279,234 @@ def format_recent_turns(turns: list[dict], *, user_only: bool = False) -> str:
             lines.append("PENGWIN " + str(turn["role"]) + ": " +
                          redact_text(str(turn["content"]), limit=TEXT_LIMIT))
     return "\n".join(lines)[:4_000]
+
+
+def _fact_label(value: object, *, limit: int = 120) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return " ".join(redact_text(value, limit=limit).split())[:limit] or None
+
+
+def _fact_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return round(number, 2) if math.isfinite(number) and 0 <= number <= 1_000_000 else None
+
+
+def _fact_count(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 10_000 else None
+
+
+def _fact_date(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) > 50:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return None
+
+
+def _json_object(raw: str) -> dict:
+    if not isinstance(raw, str) or len(raw) > 50_000:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def latest_project_facts(*, user_id: str, channel_id: str,
+                         thread_root_ts: str | None = None) -> dict | None:
+    """Read the owner's latest typed project facts from its newest revision.
+
+    Only DONE role outputs from the newest linked run count. An amendment with
+    work still pending must not inherit an older quantity, estimate, or review.
+    This function never invokes a provider or returns raw request/job text.
+    """
+    if not _scope_allowed(user_id, channel_id):
+        return None
+    root = _safe_ts(thread_root_ts)
+    scope = (CrewProject.owner_user_id == user_id,
+             CrewProject.channel_id == channel_id)
+    with SessionLocal() as session:
+        project = None
+        if root:
+            project = session.execute(select(CrewProject).where(
+                *scope, CrewProject.thread_root_ts == root,
+            ).limit(1)).scalar_one_or_none()
+        if project is None:
+            project = session.execute(select(CrewProject).where(*scope).order_by(
+                CrewProject.updated_at.desc(), CrewProject.id.desc(),
+            ).limit(1)).scalar_one_or_none()
+        if project is None:
+            return None
+        linked = session.execute(select(CrewRun).join(
+            ProjectRunLink, ProjectRunLink.run_id == CrewRun.id,
+        ).where(
+            ProjectRunLink.project_id == project.id,
+            CrewRun.source_user == user_id, CrewRun.channel_id == channel_id,
+        ).order_by(ProjectRunLink.id.desc()).limit(1)).scalar_one_or_none()
+        by_kind: dict[str, dict] = {}
+        if linked is not None:
+            jobs = session.execute(select(AgentJob).where(
+                AgentJob.run_id == linked.id,
+                AgentJob.status == "DONE",
+                AgentJob.kind.in_(("event_research", "product_source", "budget_review")),
+            ).order_by(AgentJob.updated_at.desc(), AgentJob.id.desc())).scalars().all()
+            for job in jobs:
+                by_kind.setdefault(job.kind, _json_object(job.output_json))
+        plan = _json_object(project.plan_json)
+        event_plan = plan.get("event") if isinstance(plan.get("event"), dict) else None
+        swag_plan = plan.get("swag") if isinstance(plan.get("swag"), dict) else None
+        invite_plan = plan.get("invitations") if isinstance(plan.get("invitations"), dict) else None
+        event_work = by_kind.get("event_research", {})
+        product_work = by_kind.get("product_source", {})
+        budget_work = by_kind.get("budget_review", {})
+        venue_route = event_work.get("official_reservation_route")
+        known_venue_route = (
+            isinstance(venue_route, dict)
+            and venue_route.get("operator") == "Transbay Joint Powers Authority"
+            and venue_route.get("url") == "https://www.tjpa.org/permits-reservations"
+            and venue_route.get("availability") == "UNCHECKED"
+        )
+        product_checked = product_work.get("publisher_status") == "ok"
+        source = product_work.get("source_url")
+        return {
+            "project_id": project.id,
+            "name": _fact_label(project.name, limit=120) or "Office project",
+            "project_status": project.status if project.status in {
+                "PLANNING", "ACTIVE", "WAITING_APPROVAL", "COMPLETE", "HELD", "FAILED", "REJECTED"
+            } else "UNKNOWN",
+            "run_status": linked.status if linked and linked.status in {
+                "QUEUED", "RUNNING", "COMPLETE", "HELD", "FAILED"
+            } else "UNKNOWN",
+            "event": ({
+                "title": _fact_label(event_plan.get("title")) or "Event",
+                "date": _fact_label(event_plan.get("date_phrase"), limit=80),
+                "time": _fact_label(event_plan.get("time_phrase"), limit=80),
+                "venue": _fact_label(event_plan.get("venue_name")),
+                "capacity": _fact_count(event_plan.get("capacity")),
+                "venue_status": "UNCONFIRMED" if event_work.get("venue_status") == "UNCONFIRMED" else "NOT_CONFIRMED",
+                "rsvp_status": "NOT_CREATED" if event_work.get("eventbrite_status") == "NOT_CREATED" else "UNVERIFIED",
+                "official_inquiry_url": ("https://www.tjpa.org/permits-reservations"
+                                         if known_venue_route else None),
+            } if event_plan else None),
+            "invitations": ({
+                "status": "DRAFT_ONLY" if event_work.get("invitation_status") == "DRAFT_ONLY" else "DRAFT_PENDING",
+            } if invite_plan else None),
+            "swag": ({
+                "quantity": _fact_count(swag_plan.get("quantity")),
+                "publisher_status": "ok" if product_checked else "unchecked",
+                "source_url": ("https://www.printful.com/custom-water-bottles"
+                               if product_checked and source == "https://www.printful.com/custom-water-bottles" else None),
+                "checked_at": _fact_date(product_work.get("checked_at")),
+                "currency": "USD" if product_work.get("currency") == "USD" else None,
+                "unit_min": _fact_number(product_work.get("unit_min")) if product_checked else None,
+                "unit_max": _fact_number(product_work.get("unit_max")) if product_checked else None,
+                "subtotal_min": _fact_number(product_work.get("subtotal_min")) if product_checked else None,
+                "subtotal_max": _fact_number(product_work.get("subtotal_max")) if product_checked else None,
+                "checkout_status": "NOT_READY",
+            } if swag_plan else None),
+            "treasury": ({
+                "review_status": "ESTIMATE_ONLY" if budget_work.get("review_status") == "ESTIMATE_ONLY" else "PENDING",
+                "product_subtotal_min": _fact_number(budget_work.get("product_subtotal_min")),
+                "product_subtotal_max": _fact_number(budget_work.get("product_subtotal_max")),
+                "payment_status": "NONE_IN_PROJECT_REVIEW" if budget_work.get("payment_status") == "NONE" else "UNVERIFIED",
+                "reserved_cents": 0 if budget_work.get("reserved_cents") == 0 else None,
+            } if linked else None),
+        }
+
+
+def format_project_facts(facts: dict | None, *, for_model: bool = False) -> str:
+    """Produce a short role-neutral recap, with research and payment boundaries."""
+    if facts is None:
+        return "I don't see a saved project for you in this channel." if not for_model else ""
+    lines = [f"Latest saved project: {facts['name']}."]
+    if facts.get("run_status") in {"QUEUED", "RUNNING"}:
+        lines.append("The latest revision is still being worked on; completed facts below may be pending.")
+    event = facts.get("event")
+    if event:
+        details = ", ".join(str(value) for value in (
+            event.get("date"), event.get("time"), event.get("venue")
+        ) if value)
+        lines.append(f"Events: {event['title']}" + (f" ({details})" if details else "") +
+                     ". Venue availability and booking are unconfirmed; no new RSVP page is verified for this plan.")
+        if event.get("official_inquiry_url"):
+            lines.append("Official venue inquiry route: TJPA permits page "
+                         f"{event['official_inquiry_url']} (availability unchecked; no reservation).")
+    invites = facts.get("invitations")
+    if invites:
+        lines.append("Invitations: draft only; no sending is recorded by this project workflow."
+                     if invites.get("status") == "DRAFT_ONLY" else
+                     "Invitations: drafting is pending; no sending is recorded by this project workflow.")
+    swag = facts.get("swag")
+    if swag:
+        quantity = swag.get("quantity")
+        item = f"{quantity} water bottles" if quantity else "water bottles (quantity unconfirmed)"
+        if swag.get("publisher_status") == "ok" and swag.get("currency") == "USD" and (
+            swag.get("unit_min") is not None and swag.get("unit_max") is not None
+        ):
+            source = "Printful's official catalog"
+            checked = f", checked {swag['checked_at']}" if swag.get("checked_at") else ""
+            lines.append(f"Buyer: {item}; {source} product range ${swag['unit_min']:.2f}–${swag['unit_max']:.2f} per bottle{checked}.")
+            if swag.get("subtotal_min") is not None and swag.get("subtotal_max") is not None:
+                lines.append(f"Product-only subtotal estimate: ${swag['subtotal_min']:.2f}–${swag['subtotal_max']:.2f}.")
+            if swag.get("source_url"):
+                lines.append(f"Catalog source: {swag['source_url']}.")
+        else:
+            lines.append(f"Buyer: {item}; no current official product range is saved for this revision.")
+        lines.append("Checkout is not ready; shipping, tax, artwork, variant, stock, and final total are unquoted.")
+    treasury = facts.get("treasury")
+    if treasury:
+        if treasury.get("review_status") == "ESTIMATE_ONLY":
+            lines.append("Treasurer: estimate review only, with no checkout approval.")
+        else:
+            lines.append("Treasurer: review is pending for this revision.")
+        if treasury.get("payment_status") == "NONE_IN_PROJECT_REVIEW" and treasury.get("reserved_cents") == 0:
+            lines.append("The project review records no funds reserved or payment action; provider payment reconciliation is separate.")
+    prefix = "OWNER-SCOPED SAVED PROJECT FACTS (not spending or booking approval):\n" if for_model else ""
+    return (prefix + "\n".join(lines))[:1_500]
+
+
+def combine_context(recent_turns: str, project_facts: str) -> str:
+    """Keep the newest complete conversation lines plus bounded saved facts."""
+    project_facts = project_facts[:1_500]
+    budget = 4_000 - len(project_facts) - (1 if project_facts else 0)
+    kept = []
+    remaining = budget
+    for line in reversed(recent_turns.splitlines()):
+        if not line.startswith(("USER:", "PENGWIN ")):
+            continue
+        if len(line) + 1 > remaining:
+            break
+        kept.append(line)
+        remaining -= len(line) + 1
+    parts = ["\n".join(reversed(kept))] if kept else []
+    if project_facts:
+        parts.append(project_facts)
+    return "\n".join(parts)
+
+
+def is_project_recall_request(text: str) -> bool:
+    """Match explicit recaps without intercepting live provider-status requests."""
+    value = " ".join(text.casefold().split())
+    if re.search(
+        r"\b(?:what have we planned|what did we plan|what'?s (?:our|my|the) plan|"
+        r"remind me (?:of|about) (?:our|my|the) (?:plan|project)|"
+        r"(?:what happened|where are we|status|update|recap|summary).{0,50}(?:our|my|the) project|"
+        r"(?:our|my|the) project.{0,50}(?:status|update|recap|summary))\b",
+        value,
+    ):
+        return True
+    if re.search(r"\b(?:what happened|where are we|status|update|recap|summary)\b", value):
+        return bool(re.search(r"\b(?:bottles?|invitations?|venue)\b", value))
+    return bool(
+        re.search(r"\b(?:did we|have we|were|was)\b", value)
+        and re.search(r"\b(?:bottles?|invitations?|venue)\b", value)
+        and re.search(r"\b(?:pay|paid|purchase|buy|bought|send|sent|book|booked|reserve|reserved)\b", value)
+    )
 
 
 def enqueue_delivery_run(*, flow: str, user_id: str, channel_id: str,

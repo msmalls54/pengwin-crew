@@ -206,3 +206,107 @@ assert 'Need 40 bottles' not in contexts[-1][2]
     result = subprocess.run([sys.executable, "-c", script], env=env,
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
+
+
+def test_each_role_recalled_shared_project_facts_without_provider_work(tmp_path):
+    env = os.environ.copy()
+    env.update({
+        "DATABASE_URL": f"sqlite:///{tmp_path / 'shared-project.db'}",
+        "PAYMENT_MODE": "simulated", "PLANNER_MODE": "deterministic",
+        "SANDBOX_MODE": "local", "SLACK_DEMO_CHANNEL_ID": "C_DEMO",
+        "SLACK_ALLOWED_USER_IDS": "U_A,U_B", "SLACK_ADMIN_USER_IDS": "",
+        "SLACK_BUYER_BOT_TOKEN": "test-buyer", "SLACK_BUYER_APP_TOKEN": "test-buyer-app",
+        "SLACK_EVENTS_BOT_TOKEN": "test-events", "SLACK_EVENTS_APP_TOKEN": "test-events-app",
+        "SLACK_TREASURER_BOT_TOKEN": "test-treasurer",
+        "SLACK_TREASURER_APP_TOKEN": "test-treasurer-app",
+    })
+    script = '''
+import json
+from uuid import uuid4
+from sqlalchemy import func, select
+from crew.db import AgentJob, CrewRun, SessionLocal, init_db
+from crew.memory import create_or_update_project
+from crew import role_slack_bot
+init_db()
+run_id = str(uuid4())
+with SessionLocal.begin() as session:
+    session.add(CrewRun(id=run_id, flow='project-plan', source_user='U_A',
+                        channel_id='C_DEMO', status='COMPLETE'))
+create_or_update_project(run_id=run_id, owner_user_id='U_A', channel_id='C_DEMO',
+    thread_root_ts='100.001', name='SF launch', safe_plan={
+        'event':{'title':'SF launch','venue_name':'Salesforce Park','date_phrase':'Oct 2'},
+        'swag':{'quantity':40},
+        'invitations':{'audience_phrase':'the team','emails':['private@example.com']}},
+    status='ACTIVE')
+with SessionLocal.begin() as session:
+    for role, kind, output in (
+        ('Events','event_research',{'venue_status':'UNCONFIRMED',
+            'eventbrite_status':'NOT_CREATED','invitation_status':'DRAFT_ONLY'}),
+        ('Buyer','product_source',{'publisher_status':'ok',
+            'source_url':'https://www.printful.com/custom-water-bottles',
+            'currency':'USD','unit_min':13,'unit_max':16,
+            'subtotal_min':520,'subtotal_max':640,'checkout_status':'NOT_READY'}),
+        ('Treasurer','budget_review',{'review_status':'ESTIMATE_ONLY',
+            'payment_status':'NONE','reserved_cents':0}),
+    ):
+        session.add(AgentJob(id=str(uuid4()), run_id=run_id, role=role, kind=kind,
+                             input_json='{}', output_json=json.dumps(output), status='DONE'))
+class FakeApp:
+    def __init__(self, *, token):
+        self.events = {}
+    def event(self, name):
+        def decorate(fn):
+            self.events[name] = fn
+            return fn
+        return decorate
+role_slack_bot.App = FakeApp
+def forbidden_model(*args, **kwargs):
+    raise AssertionError('recall must not call a model, worker, or provider')
+role_slack_bot.answer = forbidden_model
+responses = []
+def say(**options):
+    responses.append(options)
+    return {'ts': '900.' + str(len(responses)).zfill(6)}
+with SessionLocal() as session:
+    before_runs = session.scalar(select(func.count()).select_from(CrewRun))
+    before_jobs = session.scalar(select(func.count()).select_from(AgentJob))
+for index, role in enumerate(('Buyer', 'Events', 'Treasurer'), start=1):
+    mention = role_slack_bot.build_app(role).events['app_mention']
+    mention({'user':'U_A','channel':'C_DEMO','ts':f'{index}00.001',
+             'text':f'<@{role}> What have we planned?'},
+            {'event_id':f'E{index}'}, say)
+    reply = responses[-1]['text']
+    assert 'Salesforce Park' in reply and '40 water bottles' in reply
+    assert '$520.00–$640.00' in reply and 'Invitations: draft only' in reply
+    assert 'no funds reserved' in reply and 'Checkout is not ready' in reply
+    assert responses[-1]['thread_ts'] == f'{index}00.001'
+other = role_slack_bot.build_app('Events').events['app_mention']
+other({'user':'U_B','channel':'C_DEMO','ts':'500.001',
+       'text':'<@Events> What have we planned?'}, {'event_id':'E4'}, say)
+assert "don't see a saved project" in responses[-1]['text']
+assert 'Salesforce Park' not in responses[-1]['text']
+model_contexts = []
+def model_stub(role, text, **kwargs):
+    model_contexts.append((role, kwargs['user_id'], kwargs['context']))
+    return 'Read-only model stub'
+role_slack_bot.answer = model_stub
+buyer = role_slack_bot.build_app('Buyer').events['app_mention']
+buyer({'user':'U_A','channel':'C_DEMO','ts':'700.001',
+       'text':'<@Buyer> Tell me about the venue'}, {'event_id':'E6'}, say)
+assert 'Salesforce Park' in model_contexts[-1][2]
+assert 'Product-only subtotal estimate' in model_contexts[-1][2]
+assert 'private@example.com' not in model_contexts[-1][2]
+buyer({'user':'U_B','channel':'C_DEMO','ts':'800.001',
+       'text':'<@Buyer> Tell me about the venue'}, {'event_id':'E7'}, say)
+assert model_contexts[-1] == ('Buyer', 'U_B', '')
+sent_count = len(responses)
+other({'user':'U_A','channel':'C_OTHER','ts':'600.001',
+       'text':'<@Events> What have we planned?'}, {'event_id':'E5'}, say)
+assert len(responses) == sent_count
+with SessionLocal() as session:
+    assert session.scalar(select(func.count()).select_from(CrewRun)) == before_runs
+    assert session.scalar(select(func.count()).select_from(AgentJob)) == before_jobs
+'''
+    result = subprocess.run([sys.executable, "-c", script], env=env,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr

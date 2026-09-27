@@ -51,11 +51,17 @@ def build_app(role: str) -> App:
                                       thread_root_ts=thread_root_ts)
         if not claim.accepted:
             return
-        context = memory.format_recent_turns(memory.recent_turns(
+        recent = memory.format_recent_turns(memory.recent_turns(
             role=role, user_id=user_id, channel_id=channel_id,
             thread_root_ts=thread_root_ts, exclude_delivery_id=delivery_id))
+        project_facts = memory.latest_project_facts(
+            user_id=user_id, channel_id=channel_id, thread_root_ts=thread_root_ts)
+        context = memory.combine_context(
+            recent, memory.format_project_facts(project_facts, for_model=True))
         if claim.cached_reply:
             reply = claim.cached_reply
+        elif memory.is_project_recall_request(text):
+            reply = memory.format_project_facts(project_facts)
         else:
             thread_token = memory.set_active_thread_root(thread_root_ts)
             try:

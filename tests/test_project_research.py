@@ -43,6 +43,23 @@ def test_project_plan_keeps_stated_details_and_removes_invented_ones():
     assert "has not reserved" in summary and "None have been sent" in summary
 
 
+def test_model_json_wrappers_still_require_typed_proposals(tmp_path):
+    _run_isolated(r'''
+from pydantic import ValidationError
+from crew.inference import _model_json_object
+from crew.project_planner import ProjectPlan
+wrapped = 'Here is the requested plan:\n\x60\x60\x60json\n{"name":"Park event","event":{"title":"Park event","venue_name":"Salesforce Park"}}\n\x60\x60\x60'
+plan = ProjectPlan.model_validate(_model_json_object(wrapped))
+assert plan.event.venue_name == "Salesforce Park"
+try:
+    ProjectPlan.model_validate(_model_json_object('{"name":"Park event","swag":{"quantity":3,"product":"fictional"}}'))
+except ValidationError:
+    pass
+else:
+    raise AssertionError("Unsupported product escaped typed validation")
+''', tmp_path)
+
+
 def test_project_context_uses_user_lines_only_and_routes_followup():
     context = "USER: Plan an event at Salesforce Park\nPENGWIN Events: The date is Nov 3"
     proposal = ProjectPlan(name="Office project", event=EventProposal(title="Event", date_phrase="Nov 3"),
