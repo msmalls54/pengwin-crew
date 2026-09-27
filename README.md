@@ -2,7 +2,7 @@
 
 ## A crew that works where your team already talks
 
-Pengwin lives in the private [`#pengwin-ops` Slack channel](https://app.slack.com/client/T0C4K935FHT/C0C4910LVAB). Mention Concierge for a request that spans the crew, or mention Buyer, Events, or Treasurer directly for their work. Buyer handles product checks and sandboxed Python, Events prepares event drafts, and Treasurer checks purchases against the requested quantity and budget. Each agent reports its work and asks for approval in the same Slack conversation. The small browser lab lets hackathon judges inspect generated code, execution attempts, stdout, and stderr.
+Pengwin lives in the private `#pengwin-ops` Slack channel. Mention Concierge for a request that spans the crew, or mention Buyer, Events, or Treasurer directly for their work. Buyer handles product checks and sandboxed Python, Events prepares event drafts, and Treasurer checks purchases against the requested quantity and budget. Each agent reports its work and asks for approval in the same Slack conversation. The small browser lab lets hackathon judges inspect generated code, execution attempts, stdout, and stderr.
 
 **Live judge lab:** [https://104-156-229-63.sslip.io](https://104-156-229-63.sslip.io) (demo token shared privately). [Run the demo](docs/demo-runbook.md) with Slack as the crew's workplace and the browser as execution proof.
 
@@ -92,7 +92,7 @@ Real Printful quotes and FX conversion are future extensions; no comparison shou
 
 Slack is the request, update, and approval surface. The browser lab exists to show judges the execution loop required by Challenge 1. The live deployment uses one private `#pengwin-ops` channel with four installed bots. To reproduce it, use the [Concierge manifest](slack-app-manifest.yaml), [Buyer manifest](slack-manifests/buyer.yaml), [Events manifest](slack-manifests/events.yaml), and [Treasurer manifest](slack-manifests/treasurer.yaml), and invite all four bots to the channel. All four receive `app_mentions:read` and `chat:write`; Concierge alone also receives `commands` for `/crew`. No app needs `chat:write.customize` impersonation permission.
 
-The four locally supplied penguin avatars are sized for Slack app icons. The Concierge icon is live in Slack. These user-supplied images are kept out of the source repository; teams deploying their own crew should upload icons they have rights to use. Slack's workspace display name is Pengwin; its existing `brackenrow.slack.com` address remains because `pengwin.slack.com` was unavailable.
+The four locally supplied penguin avatars are sized for Slack app icons. The Concierge icon is live in Slack. These user-supplied images are kept out of the source repository; teams deploying their own crew should upload icons they have rights to use. Slack's workspace display name is Pengwin.
 
 Enable Socket Mode and the `app_mention` event on all four apps. Generate each app's `connections:write` token, and put those plus each bot's `xoxb` token into the ignored `.env` using the `SLACK_...` names in `.env.example`. Set `SLACK_DEMO_CHANNEL_ID` to the ID of `#pengwin-ops`, `SLACK_ALLOWED_USER_IDS` to the members permitted to run requests, and `SLACK_ADMIN_USER_IDS` to the members permitted to freeze/unfreeze or reset the local simulation. Each listener refuses to start without a channel and at least one allowed member. Tokens and IDs never belong in Git or the browser sandbox. [Slack's Socket Mode guide](https://docs.slack.dev/apis/events-api/using-socket-mode/) documents the app-level token and connection.
 
