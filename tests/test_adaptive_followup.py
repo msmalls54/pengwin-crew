@@ -51,7 +51,7 @@ assert jobs.get_run(run_id)['status'] == 'COMPLETE'
 
 def alternatives(query, *, kind='web', location=None, max_results=3):
     assert (query, kind, location, max_results) == (
-        'event venues', 'place', 'san francisco ca united states', 5)
+        'parks for events', 'place', 'san francisco ca united states', 5)
     return ResearchResult(status='ok', kind='place', query=query, location=location,
         searched_at=datetime.now(timezone.utc), results=[
             SearchLead(title='Salesforce Park', url='https://example.com/original'),

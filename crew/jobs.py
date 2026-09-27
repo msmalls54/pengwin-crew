@@ -633,6 +633,11 @@ def _scoped_latest_project(*, user_id: str, channel_id: str,
     return facts if exact else None
 
 
+def _alternative_venue_query(venue: str) -> str:
+    """Keep replacement leads close to the type of place the user chose."""
+    return "parks for events" if re.search(r"\b(?:park|garden|plaza)\b", venue, re.I) else "event venues"
+
+
 def research_venue_alternatives(*, user_id: str, channel_id: str,
                                 thread_root_ts: str | None = None) -> str:
     """Search fresh leads for a saved venue; no project or provider writes."""
@@ -648,7 +653,7 @@ def research_venue_alternatives(*, user_id: str, channel_id: str,
     if not public_location:
         return (f"I have {venue} in the saved plan, but no verified city. "
                 "Tell me the city so I can search alternatives without sending private venue details to a search provider.")
-    search = lookup_project_facts("event venues", kind="place",
+    search = lookup_project_facts(_alternative_venue_query(venue), kind="place",
                                   location=public_location, max_results=5)
     leads = ([lead for lead in search.results
               if lead.url and venue.casefold() not in lead.title.casefold()][:3]
@@ -777,7 +782,8 @@ def _project_event_work(run: CrewRun, plan_data: dict,
         place_query, public_location, route_query = event_venue_queries(venue)
         if venue_unavailable:
             alternative_search = lookup_project_facts(
-                "event venues", kind="place", location=public_location, max_results=5,
+                _alternative_venue_query(venue), kind="place", location=public_location,
+                max_results=5,
             )
             if alternative_search.status == "ok":
                 alternative_leads = [
