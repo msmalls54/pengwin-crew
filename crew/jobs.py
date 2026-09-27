@@ -817,18 +817,22 @@ def _perform(job: AgentJob, run: CrewRun) -> tuple[dict, list[tuple[str, str, di
             })], "Events is checking our saved publications and their current provider status.", False
         if run.flow == "project-plan":
             from .memory import create_or_update_project
-            from .project_planner import checked_project_plan, project_plan_summary
+            from .project_planner import ProjectPlan, checked_project_plan, project_plan_summary
             try:
                 request_text = data["text"]
                 context = data.get("context", "")
-                plan = checked_project_plan(
-                    VultrInference().project_plan(request_text=request_text, context=context),
-                    request_text, context=context,
-                )
+                try:
+                    proposal = VultrInference().project_plan(request_text=request_text,
+                                                              context=context)
+                except (KeyError, ValueError, RuntimeError):
+                    # Inference can return malformed JSON or hit its call cap. The
+                    # checker can still extract explicitly stated project facts;
+                    # it never treats the model as evidence of approval or action.
+                    proposal = ProjectPlan(name="Office project")
+                plan = checked_project_plan(proposal, request_text, context=context)
             except (KeyError, ValueError) as exc:
-                question = ("I can coordinate the event, water bottles, and invitations. "
-                            "Please give the event location and approximate date, plus any bottle quantity or audience you know. "
-                            "Nothing has been booked, bought, or sent.")
+                question = ("Tell me which event, water bottles, or invitations you want me "
+                            "to plan, and I'll bring the crew into this thread.")
                 return {"clarification": str(exc)[:160]}, [], question, False
             except Exception as exc:
                 message = ("I couldn't build a checked project plan right now. "

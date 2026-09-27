@@ -104,6 +104,67 @@ assert "no reservation has been requested" in park_message
     assert result.returncode == 0, result.stderr
 
 
+def test_exact_demo_request_survives_malformed_model_output(tmp_path):
+    env = os.environ.copy()
+    env.update({
+        "DATABASE_URL": f"sqlite:///{tmp_path / 'malformed-model.db'}",
+        "PAYMENT_MODE": "simulated",
+        "SLACK_DEMO_CHANNEL_ID": "C_DEMO",
+        "SLACK_ALLOWED_USER_IDS": "U_TEST",
+        "BRAVE_SEARCH_API_KEY": "",
+    })
+    script = r'''
+import json
+from sqlalchemy import select
+from crew.db import CrewProject, Payment, PendingOrder, SessionLocal
+from crew.research import ResearchResult
+from crew.seed import seed_demo
+import crew.jobs as jobs
+import crew.research as research
+
+request = ("Plan a meetup for 30 local AI founders at Salesforce Park about a month "
+           "from now, starting around 5 p.m. for 90 minutes. Draft invitation copy, "
+           "source 24 custom water bottles, and have Treasurer review the budget. "
+           "Keep the plan in this thread.")
+class MalformedInference:
+    def project_plan(self, *, request_text, context=""):
+        assert request_text == request
+        raise ValueError("Vultr model did not return valid ProjectPlan JSON")
+
+def unavailable_search(query, *, kind="web", location=None, max_results=3):
+    return ResearchResult(status="unavailable", kind=kind, query=query,
+                          reason="No Brave key")
+
+seed_demo(reset=True)
+jobs.VultrInference = MalformedInference
+research.lookup_project_facts = unavailable_search
+jobs._notify = lambda *args: None
+run_id = jobs.submit_run("project-plan", source_user="U_TEST", channel_id="C_DEMO",
+                         request_text=request)
+for role in ("Concierge", "Events", "Buyer", "Treasurer"):
+    assert jobs.run_one_job(role), role
+run = jobs.get_run(run_id)
+assert run["status"] == "COMPLETE", run
+assert {entry["role"] for entry in run["jobs"]} == {
+    "Concierge", "Events", "Buyer", "Treasurer"}
+with SessionLocal() as session:
+    project = session.get(CrewProject, run_id)
+    assert project is not None
+    plan = json.loads(project.plan_json)
+    assert plan["event"]["date_phrase"] == "about a month from now"
+    assert plan["event"]["time_phrase"] == "starting around 5 p.m. for 90 minutes"
+    assert plan["event"]["venue_name"] == "Salesforce Park"
+    assert plan["event"]["capacity"] == 30
+    assert plan["swag"]["quantity"] == 24
+    assert plan["invitations"]["audience_phrase"] == "local AI founders"
+    assert session.execute(select(PendingOrder)).scalars().all() == []
+    assert session.execute(select(Payment)).scalars().all() == []
+'''
+    result = subprocess.run([sys.executable, "-c", script], env=env,
+                            capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, result.stderr
+
+
 def test_event_status_readback_and_failure_are_distinct(tmp_path):
     env = os.environ.copy()
     env.update({
