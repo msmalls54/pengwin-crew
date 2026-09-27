@@ -11,7 +11,7 @@ Use the private #pengwin-ops Slack channel for the crew story and the [public ju
 
 The [judge activity feed](https://104-156-229-63.sslip.io) is read-only and uses fixed, safe labels. It separates sourced product estimates from mock order proposals, simulated checkouts, submitted sandbox transfers, and real settlement unknown. The model-call count is an attempted-call counter, not a billed-cost figure.
 
-[Submission slides](https://github.com/msmalls54/pengwin-crew/blob/master/assets/deck/pengwin-agent-arena-submission.pdf) and the [59-second demo video](https://github.com/msmalls54/pengwin-crew/blob/master/assets/demo/pengwin-challenge1-demo.mp4) are public repository artifacts. Verify both anonymously after pushing; a local file alone is not a submitted link.
+[Submission slides](https://github.com/msmalls54/pengwin-crew/blob/master/assets/deck/pengwin-agent-arena-submission.pdf) are a public repository artifact. The [59-second demo video](https://104-156-229-63.sslip.io/static/pengwin-challenge1-demo.mp4) is served directly from the judge site; the identical MP4 is [archived in GitHub](https://github.com/msmalls54/pengwin-crew/blob/master/assets/demo/pengwin-challenge1-demo.mp4). Verify both anonymously; a local file alone is not a submitted link.
 
 ## Submission provenance and boundaries
 

@@ -1,6 +1,6 @@
 # Challenge 1 video provenance
 
-The [59-second MP4](../assets/demo/pengwin-challenge1-demo.mp4) is 1920×1080 H.264/AAC. It combines recorded clips from the deployed Slack workers and public judge page. It is edited for time; the twelve-second timeout segment plays at normal speed. Narration is in [demo-narration.txt](demo-narration.txt) and was rendered locally with Microsoft Mark. The source captures remain outside the public repository because they include a private Slack workspace.
+The [59-second MP4](https://104-156-229-63.sslip.io/static/pengwin-challenge1-demo.mp4) is 1920×1080 H.264/AAC, with an identical [source artifact](../assets/demo/pengwin-challenge1-demo.mp4). It combines recorded clips from the deployed Slack workers and public judge page. It is edited for time; the twelve-second timeout segment plays at normal speed. Narration is in [demo-narration.txt](demo-narration.txt) and was rendered locally with Microsoft Mark. The source captures remain outside the public repository because they include a private Slack workspace.
 
 ## Evidence shown
 
