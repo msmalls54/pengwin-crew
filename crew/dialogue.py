@@ -66,9 +66,21 @@ def spend_report(text: str, *, now: datetime | None = None) -> str:
 
 
 def _looks_like_purchase(text: str) -> bool:
-    if re.search(r"\b(order|buy|purchase|replenish|restock|pick up|shop for)\b", text, re.I):
-        return True
-    return bool(re.search(r"\b(need|want|get)\b", text, re.I) and
+    def prohibited(start: int) -> bool:
+        # Look only inside the current clause, so "do not order X; buy Y"
+        # still recognizes the later positive instruction.
+        clause = re.split(r"[.!?;]|\b(?:but|instead)\b", text[:start], flags=re.I)[-1]
+        return bool(re.search(
+            r"\b(?:do\s+not|don['’]?t|never|not\s+to|no)\s+"
+            r"(?:(?:please|ever|actually|immediately|yet|want\s+to|need\s+to)\s+)?$",
+            clause, re.I,
+        ))
+
+    for match in re.finditer(r"\b(order|buy|purchase|replenish|restock|pick up|shop for)\b", text, re.I):
+        if not prohibited(match.start()):
+            return True
+    need = re.search(r"\b(need|want|get)\b", text, re.I)
+    return bool(need and not prohibited(need.start()) and
                 re.search(r"\b\d+\b", text) and
                 re.search(r"\b(oat milk|coffee|hoodie|welcome kit|supplies)\b", text, re.I))
 
@@ -86,12 +98,14 @@ def _looks_like_event_status(text: str, context: str = "") -> bool:
     event_words = re.compile(r"\b(events?|eventbrite|rsvp pages?)\b", re.I)
     if event_words.search(text) and status_words.search(text):
         return True
+    followup = re.sub(r"^(?:(?:and\s+)?(?:what|how)\s+about\s+|and\s+)",
+                      "", text.strip(), count=1, flags=re.I)
     if not re.fullmatch(
         r"(?:on |the one on |for )?"
         r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
         r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
         r"\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?[?.! ]*",
-        text.strip(), re.I,
+        followup, re.I,
     ):
         return False
     try:

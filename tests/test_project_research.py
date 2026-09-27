@@ -178,3 +178,66 @@ fact = research.check_printful_water_bottle_prices()
 assert fact.status == "ok" and (fact.min_price, fact.max_price) == (20.25, 23.41)
 assert fact.checked_at is not None and "shipping" in fact.note.lower()
 ''', tmp_path)
+
+
+def test_private_addresses_and_phone_numbers_never_reach_search_from_event_plan(tmp_path):
+    _run_isolated(r'''
+from types import SimpleNamespace
+from crew import jobs, research
+from crew.project_planner import EventProposal, ProjectPlan, checked_project_plan
+
+research.settings = SimpleNamespace(brave_key='offline-test-key', brave_max_searches=200)
+attempts = []
+research._reserve_search = lambda: attempts.append('budget') or True
+research.httpx.get = lambda *args, **kwargs: attempts.append('network')
+for kind, query, location in (
+    ('web', '123 Example Street apartment 4 event venue', None),
+    ('web', 'Example Street 12 event venue', None),
+    ('place', 'Musterstraße 10 Berlin event venue', None),
+    ('place', '415-555-1234 event venue', None),
+    ('web', '+49 30 1234 5678 event venue', None),
+    ('place', 'event venues', '123 Example Street apartment 4'),
+    ('place', 'event venues', '415-555-1234'),
+):
+    result = research.lookup_project_facts(query, kind=kind, location=location)
+    assert result.status == 'unavailable' and 'personal details' in result.reason
+    assert result.query == '[withheld]'
+    assert result.location in (None, '[withheld]')
+request = 'Plan an event at venue 123 Example Street apartment 4.'
+plan = checked_project_plan(ProjectPlan(name='Event', event=EventProposal(
+    title='Event', venue_name='123 Example Street apartment 4')), request)
+assert plan.event.venue_name == '123 Example Street apartment 4'
+output, _ = jobs._project_event_work(SimpleNamespace(id='offline'), plan.model_dump())
+assert output['research_status'] == 'unavailable'
+assert attempts == []  # Neither the search budget nor the provider was touched.
+''', tmp_path)
+
+
+def test_nullable_and_malformed_search_sections_return_bounded_results(tmp_path):
+    _run_isolated(r'''
+from types import SimpleNamespace
+from crew import research
+
+research.settings = SimpleNamespace(brave_key='offline-test-key', brave_max_searches=200)
+research._reserve_search = lambda: True
+class Response:
+    status_code = 200
+    def __init__(self, body): self.body = body
+    def raise_for_status(self): pass
+    def json(self): return self.body
+cases = (
+    ('web', {'web': None}, 'ok', 0),
+    ('web', {'web': {'results': None}}, 'ok', 0),
+    ('web', {'web': 'wrong shape'}, 'error', 0),
+    ('web', {'web': {'results': 'wrong shape'}}, 'error', 0),
+    ('place', {'results': None}, 'ok', 0),
+    ('place', {'results': {'results': None}}, 'ok', 0),
+    ('place', {'results': 'wrong shape'}, 'error', 0),
+    ('place', {'results': [{'title': 'Park', 'url': 'https://example.com/park'}]}, 'ok', 1),
+)
+for kind, body, status, count in cases:
+    research.httpx.get = lambda *args, **kwargs: Response(body)
+    result = research.lookup_project_facts('public park event venue', kind=kind)
+    assert result.status == status and len(result.results) == count
+    assert all(lead.checked_at is None for lead in result.results)
+''', tmp_path)

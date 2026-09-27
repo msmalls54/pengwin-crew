@@ -310,3 +310,97 @@ with SessionLocal() as session:
     result = subprocess.run([sys.executable, "-c", script], env=env,
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
+
+
+def test_buyer_and_treasurer_read_only_followups_use_scoped_24_bottle_project(tmp_path):
+    env = os.environ.copy()
+    env.update({
+        "DATABASE_URL": f"sqlite:///{tmp_path / 'human-followup.db'}",
+        "PAYMENT_MODE": "simulated", "PLANNER_MODE": "deterministic",
+        "SANDBOX_MODE": "local", "SLACK_DEMO_CHANNEL_ID": "C_DEMO",
+        "SLACK_ALLOWED_USER_IDS": "U_A,U_B", "SLACK_ADMIN_USER_IDS": "",
+        "SLACK_BUYER_BOT_TOKEN": "test-buyer", "SLACK_BUYER_APP_TOKEN": "test-buyer-app",
+        "SLACK_TREASURER_BOT_TOKEN": "test-treasurer",
+        "SLACK_TREASURER_APP_TOKEN": "test-treasurer-app",
+    })
+    script = '''
+import json
+from uuid import uuid4
+from sqlalchemy import func, select
+from crew.db import AgentJob, CrewRun, SessionLocal, init_db
+from crew.memory import create_or_update_project
+from crew import role_slack_bot
+
+init_db()
+run_id = str(uuid4())
+with SessionLocal.begin() as session:
+    session.add(CrewRun(id=run_id, flow='project-plan', source_user='U_A',
+                        channel_id='C_DEMO', status='COMPLETE'))
+create_or_update_project(run_id=run_id, owner_user_id='U_A', channel_id='C_DEMO',
+    thread_root_ts='100.001', name='Salesforce Park gathering', safe_plan={
+        'event':{'title':'SF gathering','venue_name':'Salesforce Park',
+                 'date_phrase':'about a month from now'},
+        'swag':{'quantity':24},
+        'invitations':{'audience_phrase':'local founders'}}, status='ACTIVE')
+with SessionLocal.begin() as session:
+    for role, kind, output in (
+        ('Events','event_research',{'venue_status':'UNCONFIRMED',
+            'eventbrite_status':'NOT_CREATED','invitation_status':'DRAFT_ONLY'}),
+        ('Buyer','product_source',{'publisher_status':'ok',
+            'source_url':'https://www.printful.com/custom-water-bottles',
+            'currency':'USD','unit_min':20.25,'unit_max':23.41,
+            'subtotal_min':486.00,'subtotal_max':561.84,
+            'checked_at':'2026-09-27T08:00:00+00:00','checkout_status':'NOT_READY'}),
+        ('Treasurer','budget_review',{'review_status':'ESTIMATE_ONLY',
+            'product_subtotal_min':486.00,'product_subtotal_max':561.84,
+            'payment_status':'NONE','reserved_cents':0}),
+    ):
+        session.add(AgentJob(id=str(uuid4()), run_id=run_id, role=role, kind=kind,
+                             input_json='{}', output_json=json.dumps(output), status='DONE'))
+class FakeApp:
+    def __init__(self, *, token):
+        self.events = {}
+    def event(self, name):
+        def decorate(fn):
+            self.events[name] = fn
+            return fn
+        return decorate
+role_slack_bot.App = FakeApp
+def forbidden_answer(*args, **kwargs):
+    raise AssertionError('read-only recall must not call model, queue, or ledger')
+role_slack_bot.answer = forbidden_answer
+responses = []
+def say(**options):
+    responses.append(options)
+    return {'ts':'900.' + str(len(responses)).zfill(6)}
+with SessionLocal() as session:
+    before_runs = session.scalar(select(func.count()).select_from(CrewRun))
+    before_jobs = session.scalar(select(func.count()).select_from(AgentJob))
+buyer = role_slack_bot.build_app('Buyer').events['app_mention']
+buyer({'user':'U_A','channel':'C_DEMO','ts':'100.002','thread_ts':'100.001',
+       'text':'<@Buyer> Live user-authored read-only check: what is the latest saved project in this thread, and what is the 24-bottle estimate? Please do not order.'},
+      {'event_id':'buyer-recall'}, say)
+assert '24 water bottles' in responses[-1]['text']
+assert '$486.00–$561.84' in responses[-1]['text']
+assert 'Checkout is not ready' in responses[-1]['text']
+assert responses[-1]['thread_ts'] == '100.001'
+treasurer = role_slack_bot.build_app('Treasurer').events['app_mention']
+treasurer({'user':'U_A','channel':'C_DEMO','ts':'100.003','thread_ts':'100.001',
+           'text':'<@Treasurer> What have we spent on the bottles for this project? Please distinguish the estimate from any payment.'},
+          {'event_id':'treasurer-recall'}, say)
+assert '$486.00–$561.84' in responses[-1]['text']
+assert 'estimate review only' in responses[-1]['text']
+assert 'no funds reserved or payment action' in responses[-1]['text']
+assert responses[-1]['thread_ts'] == '100.001'
+buyer({'user':'U_B','channel':'C_DEMO','ts':'100.004','thread_ts':'100.001',
+       'text':'<@Buyer> What is the latest saved project in this thread?'},
+      {'event_id':'other-user'}, say)
+assert "don't see a saved project" in responses[-1]['text']
+assert '$486.00' not in responses[-1]['text']
+with SessionLocal() as session:
+    assert session.scalar(select(func.count()).select_from(CrewRun)) == before_runs
+    assert session.scalar(select(func.count()).select_from(AgentJob)) == before_jobs
+'''
+    result = subprocess.run([sys.executable, "-c", script], env=env,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr

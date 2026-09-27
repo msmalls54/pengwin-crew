@@ -29,6 +29,26 @@ ENDPOINTS = {
 }
 EMAIL = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 LONG_NUMBER = re.compile(r"(?<!\d)\d{7,}(?!\d)")
+STREET_ADDRESS = re.compile(
+    r"\b\d{1,6}\s+(?:[A-Z0-9.'-]+\s+){1,7}"
+    r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|"
+    r"Way|Court|Ct|Place|Pl|Terrace|Ter|Circle|Cir|Parkway|Pkwy|"
+    r"Highway|Hwy|Square|Sq)\b\.?(?!\w)", re.I,
+)
+STREET_ADDRESS_REVERSED = re.compile(
+    r"\b(?:[A-Z0-9.'-]+\s+){1,7}"
+    r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|"
+    r"Way|Court|Ct|Place|Pl|Terrace|Ter|Circle|Cir|Parkway|Pkwy|"
+    r"Highway|Hwy|Square|Sq)\.?\s+\d{1,6}[A-Z]?\b", re.I,
+)
+GERMAN_STREET_ADDRESS = re.compile(
+    r"\b[A-ZÄÖÜa-zäöüß0-9.'-]{2,60}(?:straße|strasse|str\.?|weg|platz|allee)"
+    r"\s+\d{1,6}[A-Z]?\b", re.I,
+)
+PHONE_NUMBER = re.compile(
+    r"(?<!\w)(?:\+?1[\s.()-]*)?\(?\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}(?!\w)"
+    r"|(?<!\w)\+\d{1,3}[\s.()-]*(?:\d[\s.()-]*){7,14}(?!\w)"
+)
 HTML_TAG = re.compile(r"<[^>]*>")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -106,15 +126,28 @@ def _reserve_search() -> bool:
         return result.rowcount == 1
 
 
+def _contains_private_contact(value: str) -> bool:
+    return bool(EMAIL.search(value) or LONG_NUMBER.search(value)
+                or STREET_ADDRESS.search(value) or STREET_ADDRESS_REVERSED.search(value)
+                or GERMAN_STREET_ADDRESS.search(value) or PHONE_NUMBER.search(value))
+
+
 def _extract_leads(data: dict, kind: SearchKind, max_results: int) -> list[SearchLead]:
     if kind == "web":
-        raw = data.get("web", {}).get("results", [])
+        section = data.get("web")
+        if section is None:
+            return []
+        if not isinstance(section, dict):
+            raise ValueError("Unexpected web results section")
+        raw = section.get("results")
     else:
-        raw = data.get("results", [])
+        raw = data.get("results")
         if isinstance(raw, dict):
-            raw = raw.get("results", [])
-    if not isinstance(raw, list):
+            raw = raw.get("results")
+    if raw is None:
         return []
+    if not isinstance(raw, list):
+        raise ValueError("Unexpected search results section")
     leads: list[SearchLead] = []
     seen: set[str] = set()
     for item in raw:
@@ -142,7 +175,8 @@ def lookup_project_facts(query: str, *, kind: SearchKind = "web",
                          max_results: int = 3) -> ResearchResult:
     """Return search leads without persisting raw results or claiming verification.
 
-    Personal emails and long numbers are rejected rather than sent to Brave.
+    Personal contact details and street addresses are rejected rather than
+    sent to Brave.
     Callers should use short generic queries, not invitee lists or delivery
     addresses. The only durable side effect is the budget counter.
     """
@@ -150,10 +184,10 @@ def lookup_project_facts(query: str, *, kind: SearchKind = "web",
         raise ValueError("Unsupported search kind")
     query = " ".join(query.split())
     location = " ".join(location.split()) if location else None
-    if (not query or len(query) > 220 or EMAIL.search(query) or LONG_NUMBER.search(query)
-            or (location and (len(location) > 120 or EMAIL.search(location) or LONG_NUMBER.search(location)))):
-        return ResearchResult(status="unavailable", kind=kind, query=query[:220],
-                              location=location[:120] if location else None,
+    if (not query or len(query) > 220 or _contains_private_contact(query)
+            or (location and (len(location) > 120 or _contains_private_contact(location)))):
+        return ResearchResult(status="unavailable", kind=kind, query="[withheld]",
+                              location="[withheld]" if location else None,
                               reason="Search query contains personal details or is too long")
     if not settings.brave_key:
         return ResearchResult(status="unavailable", kind=kind, query=query, location=location,

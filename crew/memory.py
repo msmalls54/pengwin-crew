@@ -597,6 +597,9 @@ def combine_context(recent_turns: str, project_facts: str) -> str:
 def is_project_recall_request(text: str) -> bool:
     """Match explicit recaps without intercepting live provider-status requests."""
     value = " ".join(text.casefold().split())
+    if (re.search(r"\b(?:latest|last)\s+(?:saved\s+)?project\b", value)
+            and re.search(r"\b(?:what|which|show|tell|give|recap|summary|remind|status|estimate)\b", value)):
+        return True
     if re.search(
         r"\b(?:what have we planned|what did we plan|what'?s (?:our|my|the) plan|"
         r"remind me (?:of|about) (?:our|my|the) (?:plan|project)|"
@@ -610,7 +613,7 @@ def is_project_recall_request(text: str) -> bool:
     return bool(
         re.search(r"\b(?:did we|have we|were|was)\b", value)
         and re.search(r"\b(?:bottles?|invitations?|venue)\b", value)
-        and re.search(r"\b(?:pay|paid|purchase|buy|bought|send|sent|book|booked|reserve|reserved)\b", value)
+        and re.search(r"\b(?:pay|paid|spend|spent|cost|purchase|buy|bought|order|ordered|send|sent|book|booked|reserve|reserved)\b", value)
     )
 
 

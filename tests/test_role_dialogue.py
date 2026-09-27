@@ -41,6 +41,8 @@ dialogue.spend_report = lambda text: report
 answer = dialogue.answer('Treasurer', 'how much have we spent today?', user_id='U-owner',
                          channel_id='C-demo', delivery_id='event:1')
 assert '€58.00' in answer and 'demo checkout' in answer
+assert '€58.00' in dialogue.answer('Treasurer', 'How much did Pengwin spend today?',
+    user_id='U-owner', channel_id='C-demo', delivery_id='event:global-spend')
 assert "won't send money" in dialogue.answer('Treasurer', 'please transfer me €10',
     user_id='U-owner', channel_id='C-demo', delivery_id='event:2')
 
@@ -50,6 +52,20 @@ assert dialogue.answer('Buyer', 'please order 3 oat milk cartons for Berlin',
     user_id='U-owner', channel_id='C-demo', delivery_id='event:3') == 'queued'
 assert calls[-1][0] == 'natural-language'
 assert calls[-1][1]['request_text'] == 'please order 3 oat milk cartons for Berlin'
+assert not dialogue._looks_like_purchase('Please do not order.')
+assert not dialogue._looks_like_purchase('Please don\'t buy 24 water bottles.')
+assert not dialogue._looks_like_purchase('I do not want to buy 3 oat milk cartons.')
+assert dialogue._looks_like_purchase('Please order 3 oat milk cartons for Berlin')
+assert dialogue._looks_like_purchase('Don\'t forget to order 3 oat milk cartons')
+assert dialogue._looks_like_purchase('Do not order 24 bottles; buy 2 coffee bags instead')
+prior = 'USER: Which Pengwin RSVP events are currently live, especially on Oct 2?\nPENGWIN Events: Checking.'
+assert dialogue.answer('Events', 'And on Oct 2nd?', context=prior,
+    user_id='U-owner', channel_id='C-demo', delivery_id='event:oct-followup') == 'queued'
+assert calls[-1][0] == 'event-status'
+assert calls[-1][1]['context'] == prior
+assert dialogue._looks_like_event_status('What about Oct 2nd?', prior)
+assert dialogue._looks_like_event_status('How about on Oct 2nd?', prior)
+assert not dialogue._looks_like_event_status('And on Oct 2nd?', 'USER: Plan a new event')
 assert dialogue.answer('Events', 'set up a Berlin team lunch for 5',
     user_id='U-owner', channel_id='C-demo', delivery_id='event:4') == 'queued'
 
@@ -59,6 +75,10 @@ class StubInference:
 dialogue.VultrInference = StubInference
 assert dialogue.answer('Buyer', 'hey, what can you do?',
     user_id='U-owner', channel_id='C-demo', delivery_id='event:5') == 'Hello from Buyer'
+before = len(calls)
+assert dialogue.answer('Buyer', 'Please do not order 24 oat milk cartons.',
+    user_id='U-owner', channel_id='C-demo', delivery_id='event:no-order') == 'Hello from Buyer'
+assert len(calls) == before
 '''
     result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
