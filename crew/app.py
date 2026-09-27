@@ -356,9 +356,8 @@ def _judge_product_estimate(job: AgentJob) -> dict | None:
             "source_url": "https://www.printful.com/custom-water-bottles"}
 
 
-@app.get("/api/judge-activity")
-def judge_activity(_role: str = Depends(require_demo)):
-    """A deliberately narrow read model for the judge token."""
+def _judge_activity_payload():
+    """A fixed public projection with no request text, identifiers, or credentials."""
     with SessionLocal() as session:
         rows = session.execute(select(AuditEvent).order_by(AuditEvent.id.desc()).limit(160)).scalars().all()
         activity = [item for row in rows if (item := _judge_event(row)) is not None][:36]
@@ -397,6 +396,18 @@ def judge_activity(_role: str = Depends(require_demo)):
                         "attempted_calls": attempted_calls, "call_limit": settings.vultr_max_calls,
                         "billed_cost_usd": None},
     }
+
+
+@app.get("/api/public-activity")
+def public_activity():
+    """Give judges a read-only activity view without sharing a demo token."""
+    return _judge_activity_payload()
+
+
+@app.get("/api/judge-activity")
+def judge_activity(_role: str = Depends(require_demo)):
+    """Keep the original authenticated read route for demo clients."""
+    return _judge_activity_payload()
 
 
 @app.post("/api/code-runs", dependencies=[Depends(require_demo)])

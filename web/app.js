@@ -135,9 +135,8 @@ function renderJudge(data) {
 }
 
 async function refreshJudge() {
-  if(!adminToken||!accessRole) return;
   try {
-    const response=await fetch('/api/judge-activity',{headers:authHeaders()});
+    const response=await fetch('/api/public-activity');
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     renderJudge(await response.json());
   } catch(error) { $('activity-connection').textContent=`Activity unavailable · ${error.message}`; }
@@ -252,3 +251,4 @@ $('reset').addEventListener('click',()=>action('/api/reset'));
 setInterval(refresh,5000);
 setInterval(refreshJudge,15000);
 setInterval(pollCodeRun,2000);
+refreshJudge();

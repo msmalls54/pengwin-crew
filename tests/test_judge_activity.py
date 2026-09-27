@@ -92,6 +92,12 @@ with TestClient(app) as client:
     assert client.get("/api/state", headers=demo).status_code == 401
     response = client.get("/api/judge-activity", headers=demo)
     assert response.status_code == 200, response.text
+    public_response = client.get("/api/public-activity")
+    assert public_response.status_code == 200, public_response.text
+    assert public_response.json() == response.json() or (
+        {k: v for k, v in public_response.json().items() if k != "as_of"}
+        == {k: v for k, v in response.json().items() if k != "as_of"}
+    )
     assert client.get("/api/judge-activity", headers=admin).status_code == 200
     body = response.json()
     runs = {run["flow"]: run for run in body["runs"]}
