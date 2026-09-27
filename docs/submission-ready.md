@@ -25,4 +25,4 @@ Event teams lose context across tools, and unconstrained agent execution can rea
 
 ## Private judge access
 
-The activity feed and video open anonymously. Running a new sandbox task requires the separate `WEB_DEMO_TOKEN`; it is not in Git, the video, or these submission fields. Share it with judges only through a verified private organizer channel.
+The activity feed and video open anonymously. Running a new sandbox task requires the separate `WEB_DEMO_TOKEN`; it is not in Git, the video, or these submission fields. The signed-in submission form has no private credentials field, and no private digital organizer channel has been verified. Give the token to judges in person during the live demo, or through a private organizer channel only if one is verified later.

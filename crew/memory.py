@@ -30,6 +30,11 @@ TEXT_LIMIT = 1_000
 FACTS_LIMIT = 4_000
 RECENT_WINDOW = timedelta(minutes=15)
 PENDING_LEASE = timedelta(minutes=3)
+ORPHANED_PENDING_AFTER = timedelta(minutes=15)
+PENDING_RECOVERY_LIMIT = 10
+RESEND_NOTICE = ("I can't confirm whether an earlier request in this thread finished. "
+                 "I won't replay it automatically. Please check its status, then send a new "
+                 "message here if you still need help.")
 _SLACK_TS = re.compile(r"^[0-9]{1,20}(?:\.[0-9]{1,20})?$")
 _URL = re.compile(r"https?://[^\s<>]+", re.I)
 _EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
@@ -65,6 +70,15 @@ class EnqueuedRun:
     run_id: str | None
     duplicate: bool
     cached_reply: str | None = None
+
+
+@dataclass(frozen=True)
+class ResendNotice:
+    delivery_hash: str
+    role: str
+    user_id: str
+    channel_id: str
+    thread_root_ts: str
 
 
 def _utc(value: datetime) -> datetime:
@@ -193,15 +207,106 @@ def record_inbound(*, role: str, user_id: str, channel_id: str,
             return InboundClaim(False, True, delivery.state, delivery.run_id, delivery.reply_text)
 
 
-def cache_reply(*, delivery_id: str, user_id: str, channel_id: str, reply: str) -> None:
-    """Save a bounded reply before posting; no provider action is implied."""
+def cache_reply(*, delivery_id: str, user_id: str, channel_id: str, reply: str) -> bool:
+    """Save a reply only while this original delivery may still respond."""
     key = _delivery_hash(delivery_id)
     with SessionLocal.begin() as session:
         delivery = session.get(SlackDelivery, key, with_for_update=True)
         if delivery is None or delivery.source_user != user_id or delivery.channel_id != channel_id:
             raise ValueError("Delivery scope mismatch")
+        if delivery.state not in {"PENDING", "QUEUED"}:
+            return False
         delivery.reply_text = redact_text(reply, limit=3_000)
         delivery.updated_at = datetime.now(timezone.utc)
+        return True
+
+
+def claim_orphaned_inbound(*, role: str, now: datetime | None = None,
+                           stale_after: timedelta = ORPHANED_PENDING_AFTER,
+                           limit: int = PENDING_RECOVERY_LIMIT) -> list[ResendNotice]:
+    """Stop abandoned, unqueued deliveries and reserve one possible Slack notice.
+
+    The state transition commits before any Slack call. Nothing here replays
+    the saved (redacted) request or creates a run. A crash after this claim can
+    lose the notice, but cannot cause an automatic second notice or task.
+    """
+    if role not in ROLES or stale_after <= timedelta(0) or not 1 <= limit <= PENDING_RECOVERY_LIMIT:
+        raise ValueError("Invalid pending-delivery recovery request")
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - stale_after
+    notices: list[ResendNotice] = []
+    with SessionLocal.begin() as session:
+        candidates = session.execute(select(SlackDelivery).where(
+            SlackDelivery.role == role,
+            SlackDelivery.state == "PENDING",
+            SlackDelivery.run_id.is_(None),
+            SlackDelivery.updated_at <= cutoff,
+        ).order_by(SlackDelivery.updated_at, SlackDelivery.delivery_hash)
+         .limit(limit).with_for_update(skip_locked=True)).scalars().all()
+        for delivery in candidates:
+            changed = session.execute(update(SlackDelivery).where(
+                SlackDelivery.delivery_hash == delivery.delivery_hash,
+                SlackDelivery.state == "PENDING",
+                SlackDelivery.run_id.is_(None),
+                SlackDelivery.updated_at <= cutoff,
+            ).values(state="NEEDS_RESEND", updated_at=now)
+             .execution_options(synchronize_session=False))
+            if changed.rowcount != 1:
+                continue
+            inbound = session.execute(select(ConversationTurn).where(
+                ConversationTurn.delivery_hash == delivery.delivery_hash,
+                ConversationTurn.direction == "in",
+                ConversationTurn.role == role,
+                ConversationTurn.channel_id == delivery.channel_id,
+                ConversationTurn.source_user == delivery.source_user,
+            ).limit(1)).scalar_one_or_none()
+            thread_root = _safe_ts(inbound.thread_root_ts or inbound.message_ts) if inbound else None
+            notify = bool(thread_root and _scope_allowed(delivery.source_user, delivery.channel_id))
+            record(session, agent=role, action="slack_intake_needs_resend",
+                   detail={"delivery_hash": delivery.delivery_hash[:12], "notice_reserved": notify},
+                   severity="warning")
+            if notify:
+                notices.append(ResendNotice(delivery.delivery_hash, role,
+                                            delivery.source_user, delivery.channel_id,
+                                            thread_root))
+    return notices
+
+
+def record_resend_notice(*, notice: ResendNotice, message_ts: str) -> bool:
+    """Store a confirmed generic Slack notice without clearing NEEDS_RESEND."""
+    posted_ts = _safe_ts(message_ts)
+    if not posted_ts:
+        return False
+    now = datetime.now(timezone.utc)
+    with SessionLocal.begin() as session:
+        delivery = session.get(SlackDelivery, notice.delivery_hash, with_for_update=True)
+        if (delivery is None or delivery.state != "NEEDS_RESEND" or delivery.run_id is not None
+                or delivery.role != notice.role or delivery.source_user != notice.user_id
+                or delivery.channel_id != notice.channel_id):
+            return False
+        existing = session.execute(select(ConversationTurn.id).where(
+            ConversationTurn.role == notice.role, ConversationTurn.direction == "out",
+            ConversationTurn.delivery_hash == notice.delivery_hash,
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(ConversationTurn(role=notice.role, direction="out",
+                                         channel_id=notice.channel_id, source_user=notice.user_id,
+                                         thread_root_ts=notice.thread_root_ts,
+                                         message_ts=posted_ts, delivery_hash=notice.delivery_hash,
+                                         content=RESEND_NOTICE, created_at=now))
+        delivery.reply_text = RESEND_NOTICE
+        delivery.updated_at = now
+        record(session, agent=notice.role, action="slack_resend_notice_posted",
+               detail={"delivery_hash": notice.delivery_hash[:12]})
+    return True
+
+
+def record_resend_notice_failure(*, notice: ResendNotice, reason: str) -> None:
+    """Retain the one-attempt boundary when Slack gave no confirmed receipt."""
+    with SessionLocal.begin() as session:
+        record(session, agent=notice.role, action="slack_resend_notice_unconfirmed",
+               detail={"delivery_hash": notice.delivery_hash[:12],
+                       "reason": reason[:40]}, severity="warning")
 
 
 def record_outbound(*, role: str, user_id: str, channel_id: str, delivery_id: str,

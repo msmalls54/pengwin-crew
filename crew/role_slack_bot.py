@@ -10,6 +10,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .dialogue import answer
 from . import memory
+from .intake_recovery import start_recovery_monitor
 from .seed import seed_demo
 from .slack_bot import is_demo_channel, is_slack_allowed
 
@@ -70,8 +71,9 @@ def build_app(role: str) -> App:
                                context=context)
             finally:
                 memory.reset_active_thread_root(thread_token)
-        memory.cache_reply(delivery_id=delivery_id, user_id=user_id,
-                           channel_id=channel_id, reply=reply)
+        if not memory.cache_reply(delivery_id=delivery_id, user_id=user_id,
+                                  channel_id=channel_id, reply=reply):
+            return
         options = {"text": reply}
         if thread_root_ts:
             options["thread_ts"] = thread_root_ts
@@ -90,6 +92,7 @@ def main() -> None:
     role = os.getenv("ROLE", "")
     app = build_app(role)
     seed_demo()
+    start_recovery_monitor(role, app.client.chat_postMessage)
     SocketModeHandler(app, os.environ[f"SLACK_{role.upper()}_APP_TOKEN"]).start()
 
 

@@ -16,6 +16,7 @@ from .audit import record
 from .config import settings
 from .db import Budget, ControlFlag, CrewRun, SessionLocal
 from . import memory
+from .intake_recovery import start_recovery_monitor
 from .seed import seed_demo
 HELP = ("Tell Concierge or Events what you need in ordinary English. For an event, include the "
         "name, date, start and end time, time zone, online link, and number of free spots. "
@@ -326,8 +327,9 @@ def build_app() -> App:
                                context=context)
             finally:
                 memory.reset_active_thread_root(thread_token)
-        memory.cache_reply(delivery_id=delivery_id, user_id=user_id,
-                           channel_id=channel_id, reply=reply)
+        if not memory.cache_reply(delivery_id=delivery_id, user_id=user_id,
+                                  channel_id=channel_id, reply=reply):
+            return
         options = {"text": reply}
         if thread_root_ts:
             options["thread_ts"] = thread_root_ts
@@ -352,6 +354,7 @@ def build_app() -> App:
 def main() -> None:
     app = build_app()
     seed_demo()
+    start_recovery_monitor("Concierge", app.client.chat_postMessage)
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
 
 

@@ -149,6 +149,165 @@ except ValueError:
 ''', _env(tmp_path))
 
 
+def test_orphaned_intake_gets_one_generic_thread_notice_without_replaying_request(tmp_path):
+    _run('''
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+from sqlalchemy import func, select
+from crew import jobs
+from crew.db import AgentJob, ConversationTurn, CrewRun, SessionLocal, SlackDelivery, init_db
+from crew.intake_recovery import recover_pending_intake
+from crew.memory import cache_reply, enqueue_delivery_run, record_inbound
+
+init_db()
+delivery_id = 'event:before-queue-crash'
+claim = record_inbound(role='Concierge', user_id='U_A', channel_id='C_DEMO',
+    delivery_id=delivery_id, message_ts='100.001', thread_root_ts='100.001',
+    text='Send 24 bottles to 123 Main Street, email secret@example.com')
+assert claim.accepted
+original = jobs._new_job
+jobs._new_job = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('crash'))
+try:
+    enqueue_delivery_run(flow='project-plan', user_id='U_A', channel_id='C_DEMO',
+        delivery_id=delivery_id, request_text='Plan a park event and 24 bottles')
+    assert False
+except RuntimeError:
+    pass
+finally:
+    jobs._new_job = original
+with SessionLocal.begin() as session:
+    row = session.get(SlackDelivery, sha256(delivery_id.encode()).hexdigest())
+    assert row.state == 'PENDING' and row.run_id is None
+    row.updated_at = datetime.now(timezone.utc) - timedelta(minutes=16)
+posts = []
+def post(**options):
+    posts.append(options)
+    assert options['channel'] == 'C_DEMO' and options['thread_ts'] == '100.001'
+    assert '24 bottles' not in options['text']
+    assert 'Main Street' not in options['text']
+    assert 'secret@example.com' not in options['text']
+    return {'ts':'100.002'}
+assert recover_pending_intake('Concierge', post) == 1
+assert recover_pending_intake('Concierge', post) == 0
+assert len(posts) == 1
+old = record_inbound(role='Concierge', user_id='U_A', channel_id='C_DEMO',
+    delivery_id=delivery_id, message_ts='100.001', text='redelivered original')
+assert not old.accepted and old.state == 'NEEDS_RESEND'
+assert not cache_reply(delivery_id=delivery_id, user_id='U_A', channel_id='C_DEMO',
+    reply='late handler must not post')
+duplicate = enqueue_delivery_run(flow='project-plan', user_id='U_A', channel_id='C_DEMO',
+    delivery_id=delivery_id, request_text='Plan a park event and 24 bottles')
+assert duplicate.duplicate and duplicate.run_id is None
+with SessionLocal() as session:
+    assert session.scalar(select(func.count()).select_from(CrewRun)) == 0
+    assert session.scalar(select(func.count()).select_from(AgentJob)) == 0
+    out = session.execute(select(ConversationTurn).where(
+        ConversationTurn.delivery_hash == sha256(delivery_id.encode()).hexdigest(),
+        ConversationTurn.direction == 'out')).scalar_one()
+    assert out.content == posts[0]['text']
+    assert out.message_ts == '100.002'
+''', _env(tmp_path))
+
+
+def test_failed_notice_is_not_retried_after_restart_and_fresh_message_can_queue(tmp_path):
+    env = _env(tmp_path)
+    _run('''
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+from crew.db import SessionLocal, SlackDelivery, init_db
+from crew.intake_recovery import recover_pending_intake
+from crew.memory import record_inbound
+
+init_db()
+old_id = 'event:failed-notice'
+record_inbound(role='Events', user_id='U_A', channel_id='C_DEMO',
+    delivery_id=old_id, message_ts='200.001', thread_root_ts='200.001',
+    text='Please plan the event')
+with SessionLocal.begin() as session:
+    session.get(SlackDelivery, sha256(old_id.encode()).hexdigest()).updated_at = (
+        datetime.now(timezone.utc) - timedelta(minutes=16))
+attempts = []
+def post(**options):
+    attempts.append(options)
+    raise TimeoutError('Slack outcome unknown')
+assert recover_pending_intake('Events', post) == 0
+assert len(attempts) == 1
+with SessionLocal() as session:
+    row = session.get(SlackDelivery, sha256(old_id.encode()).hexdigest())
+    assert row.state == 'NEEDS_RESEND' and row.run_id is None
+''', env)
+    _run('''
+from hashlib import sha256
+from sqlalchemy import func, select
+from crew.db import CrewRun, SessionLocal, SlackDelivery
+from crew.intake_recovery import recover_pending_intake
+from crew.memory import enqueue_delivery_run, record_inbound
+
+def forbidden_post(**kwargs):
+    raise AssertionError('a restart must not post a second notice')
+assert recover_pending_intake('Events', forbidden_post) == 0
+assert not record_inbound(role='Events', user_id='U_A', channel_id='C_DEMO',
+    delivery_id='event:failed-notice', message_ts='200.001',
+    text='old Slack redelivery').accepted
+fresh = record_inbound(role='Events', user_id='U_A', channel_id='C_DEMO',
+    delivery_id='event:fresh-user-resend', message_ts='200.003',
+    thread_root_ts='200.001', text='Please plan the event')
+assert fresh.accepted
+queued = enqueue_delivery_run(flow='project-plan', user_id='U_A', channel_id='C_DEMO',
+    delivery_id='event:fresh-user-resend', request_text='Please plan the event',
+    thread_root_ts='200.001')
+assert queued.run_id and not queued.duplicate
+with SessionLocal() as session:
+    assert session.scalar(select(func.count()).select_from(CrewRun)) == 1
+    assert session.get(SlackDelivery, sha256(b'event:failed-notice').hexdigest()).state == 'NEEDS_RESEND'
+    assert session.get(SlackDelivery, sha256(b'event:fresh-user-resend').hexdigest()).state == 'QUEUED'
+''', env)
+
+
+def test_recovery_never_notifies_another_role_or_revoked_user(tmp_path):
+    _run('''
+import os
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+from crew.db import SessionLocal, SlackDelivery, init_db
+from crew.intake_recovery import recover_pending_intake
+from crew.memory import record_inbound
+
+init_db()
+key = 'event:scope-revoked'
+record_inbound(role='Events', user_id='U_A', channel_id='C_DEMO',
+    delivery_id=key, message_ts='300.001', thread_root_ts='300.001',
+    text='Find my saved event')
+with SessionLocal.begin() as session:
+    session.get(SlackDelivery, sha256(key.encode()).hexdigest()).updated_at = (
+        datetime.now(timezone.utc) - timedelta(minutes=16))
+def forbidden_post(**kwargs):
+    raise AssertionError('No notification may be sent to this role or user')
+assert recover_pending_intake('Buyer', forbidden_post) == 0
+with SessionLocal() as session:
+    assert session.get(SlackDelivery, sha256(key.encode()).hexdigest()).state == 'PENDING'
+os.environ['SLACK_ALLOWED_USER_IDS'] = 'U_B'
+assert recover_pending_intake('Events', forbidden_post) == 0
+with SessionLocal() as session:
+    assert session.get(SlackDelivery, sha256(key.encode()).hexdigest()).state == 'NEEDS_RESEND'
+''', _env(tmp_path))
+
+
+def test_existing_delivery_table_gains_recovery_index(tmp_path):
+    _run('''
+from crew.db import engine, init_db
+init_db()
+with engine.begin() as connection:
+    connection.exec_driver_sql('DROP INDEX ix_slack_delivery_recovery')
+    before = connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='index' AND name='ix_slack_delivery_recovery'").all()
+assert not before
+init_db()
+with engine.begin() as connection:
+    after = connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='index' AND name='ix_slack_delivery_recovery'").all()
+assert len(after) == 1
+''', _env(tmp_path))
+
+
 def test_latest_project_facts_are_restart_durable_owner_scoped_and_revision_safe(tmp_path):
     env = _env(tmp_path)
     _run('''

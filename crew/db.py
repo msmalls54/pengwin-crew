@@ -145,6 +145,7 @@ class SlackDelivery(Base):
     """
 
     __tablename__ = "slack_deliveries"
+    __table_args__ = (Index("ix_slack_delivery_recovery", "role", "state", "updated_at"),)
     delivery_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     role: Mapped[str] = mapped_column(String(20))
     channel_id: Mapped[str] = mapped_column(String(80))
@@ -229,3 +230,11 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 def init_db() -> None:
     Base.metadata.create_all(engine)
+    # create_all does not reliably add indexes to an already-existing table.
+    # Bot replicas may initialize together, so serialize the Postgres upgrade.
+    recovery_index = next(index for index in SlackDelivery.__table__.indexes
+                          if index.name == "ix_slack_delivery_recovery")
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.exec_driver_sql("SELECT pg_advisory_xact_lock(72927351)")
+        recovery_index.create(bind=connection, checkfirst=True)
