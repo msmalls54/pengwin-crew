@@ -31,6 +31,7 @@ from .luma import LumaClient, LumaPlan, approval_preview, checked_luma_plan, pla
 from .payments import pay_pending_order
 from .sandbox import sandbox
 from .slack_outbound import post_role_update
+from .web_limits import reserve_web_run_slot
 from .workflow import (
     complete_berlin_lunch,
     prepare_berlin_lunch,
@@ -151,11 +152,7 @@ def submit_web_code_run(goal: str) -> str:
     if not goal.strip() or len(goal) > 1000:
         raise ValueError("Goal must contain 1–1000 characters")
     with SessionLocal.begin() as session:
-        prior = session.execute(select(CrewRun.id).where(
-            CrewRun.source_user == "web-demo",
-        ).limit(30)).all()
-        if len(prior) >= 30:
-            raise ValueError("Web demo run limit reached")
+        reserve_web_run_slot(session, "web-demo")
         run_id = str(uuid4())
         session.add(CrewRun(id=run_id, flow="code-task", source_user="web-demo",
                             channel_id="web", status="QUEUED"))
@@ -173,11 +170,7 @@ def submit_web_demo_run(flow: str) -> str:
     if settings.payment_mode != "simulated":
         raise ValueError("Web demo flows require simulated payment mode")
     with SessionLocal.begin() as session:
-        prior = session.execute(select(CrewRun.id).where(
-            CrewRun.source_user == "web-admin",
-        ).limit(30)).all()
-        if len(prior) >= 30:
-            raise ValueError("Web demo run limit reached")
+        reserve_web_run_slot(session, "web-admin")
         run_id = str(uuid4())
         session.add(CrewRun(id=run_id, flow=flow, source_user="web-admin",
                             channel_id="web", status="QUEUED"))
@@ -604,7 +597,7 @@ def _supersede_prior_handoffs(project_id: str, *, current_run_id: str) -> None:
 
 def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
     from .project_planner import ProjectPlan
-    from .research import lookup_project_facts
+    from .research import event_venue_queries, lookup_project_facts
 
     plan = ProjectPlan.model_validate(plan_data)
     event = plan.event
@@ -641,8 +634,11 @@ def _project_event_work(run: CrewRun, plan_data: dict) -> tuple[dict, str]:
             "availability": "UNCHECKED",
         }
     if venue:
-        venue_search = lookup_project_facts(f"{venue} event venue", kind="place", max_results=2)
-        route_search = lookup_project_facts(f"{venue} official event reservation permit", kind="web", max_results=2)
+        place_query, public_location, route_query = event_venue_queries(venue)
+        venue_search = lookup_project_facts(
+            place_query, kind="place", location=public_location, max_results=2,
+        )
+        route_search = lookup_project_facts(route_query, kind="web", max_results=2)
     lines = [f"Event plan: {title}. This plan has not reserved a venue or published a new Eventbrite page."]
     if options:
         lines.append("Date options to confirm: " + ", ".join(options) + ".")

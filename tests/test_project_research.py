@@ -201,6 +201,7 @@ def test_private_addresses_and_phone_numbers_never_reach_search_from_event_plan(
 from types import SimpleNamespace
 from crew import jobs, research
 from crew.project_planner import EventProposal, ProjectPlan, checked_project_plan
+from crew.research import ResearchResult
 
 research.settings = SimpleNamespace(brave_key='offline-test-key', brave_max_searches=200)
 attempts = []
@@ -208,8 +209,14 @@ research._reserve_search = lambda: attempts.append('budget') or True
 research.httpx.get = lambda *args, **kwargs: attempts.append('network')
 for kind, query, location in (
     ('web', '123 Example Street apartment 4 event venue', None),
+    ('web', '12B Main St event venue', None),
+    ('web', '12-B Main St event venue', None),
+    ('web', 'PO Box 1234 event venue', None),
+    ('web', 'P.O. Box #1234 event venue', None),
+    ('web', 'Post Office Box 1234 event venue', None),
     ('web', 'Example Street 12 event venue', None),
     ('place', 'Musterstraße 10 Berlin event venue', None),
+    ('place', 'Postfach 1234 event venue', None),
     ('place', '415-555-1234 event venue', None),
     ('web', '+49 30 1234 5678 event venue', None),
     ('place', 'event venues', '123 Example Street apartment 4'),
@@ -223,9 +230,31 @@ request = 'Plan an event at venue 123 Example Street apartment 4.'
 plan = checked_project_plan(ProjectPlan(name='Event', event=EventProposal(
     title='Event', venue_name='123 Example Street apartment 4')), request)
 assert plan.event.venue_name == '123 Example Street apartment 4'
-output, _ = jobs._project_event_work(SimpleNamespace(id='offline'), plan.model_dump())
-assert output['research_status'] == 'unavailable'
 assert attempts == []  # Neither the search budget nor the provider was touched.
+
+searches = []
+def safe_search(query, **kwargs):
+    searches.append((query, kwargs.get('location')))
+    return ResearchResult(status='unavailable', kind=kwargs['kind'], query=query,
+                          reason='offline test')
+research.lookup_project_facts = safe_search
+jobs._project_event_work(SimpleNamespace(id='offline'), plan.model_dump())
+for private_venue in ('12B Main St', 'PO Box 1234', 'my private backyard'):
+    plan = ProjectPlan(name='Event', event=EventProposal(title='Event', venue_name=private_venue))
+    jobs._project_event_work(SimpleNamespace(id='offline'), plan.model_dump())
+assert searches and all('Main St' not in query and 'PO Box' not in query
+                        and 'backyard' not in query for query, _ in searches)
+assert all(query in {'event venues', 'event venue reservation permit guidance'}
+           for query, _ in searches)
+
+searches.clear()
+salesforce = ProjectPlan(name='Event', event=EventProposal(title='Event', venue_name='Salesforce Park'))
+output, _ = jobs._project_event_work(SimpleNamespace(id='offline'), salesforce.model_dump())
+assert searches == [
+    ('Salesforce Park', 'san francisco ca united states'),
+    ('Salesforce Park official event reservation permit', None),
+]
+assert output['official_reservation_route']['url'] == 'https://www.tjpa.org/permits-reservations'
 ''', tmp_path)
 
 

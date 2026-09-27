@@ -40,7 +40,7 @@ class FakeInference:
             invitations=InvitationProposal(audience_phrase="local startup founders"),
         )
 
-def fake_search(query, *, kind="web", max_results=3):
+def fake_search(query, *, kind="web", location=None, max_results=3):
     return ResearchResult(status="unavailable", kind=kind, query=query,
                           reason="No Brave key")
 
@@ -99,6 +99,7 @@ def test_event_status_readback_and_failure_are_distinct(tmp_path):
 import json
 from datetime import datetime, timezone
 from uuid import uuid4
+from sqlalchemy import select
 from crew.db import AgentJob, CrewRun, SessionLocal
 from crew.luma import LumaPlan
 from crew.seed import seed_demo
@@ -133,6 +134,27 @@ assert jobs.run_one_job("Concierge")
 assert jobs.run_one_job("Events")
 assert jobs.get_run(lookup)["status"] == "COMPLETE"
 assert any("live now (checked" in text and "(unlisted)" in text for role, text in messages if role == "Events")
+class CanceledClient:
+    def read_status(self, event_id):
+        assert event_id == "12345"
+        return {"status": "canceled", "url": "https://www.eventbrite.com/e/pengwin-demo-tickets-12345",
+                "listed": False}
+    def create_draft(self, *_):
+        raise AssertionError("A status lookup must never create an Eventbrite draft")
+    def create_free_ticket(self, *_):
+        raise AssertionError("A status lookup must never create a ticket")
+    def publish(self, *_):
+        raise AssertionError("A status lookup must never publish")
+jobs.EventbriteClient = CanceledClient
+changed = jobs.submit_run("event-status", source_user="U_TEST", channel_id="C_DEMO",
+                          request_text="on Oct 2nd")
+assert jobs.run_one_job("Concierge")
+assert jobs.run_one_job("Events")
+assert jobs.get_run(changed)["status"] == "COMPLETE"
+assert any("Eventbrite says canceled (checked" in text for role, text in messages if role == "Events")
+with SessionLocal() as session:
+    publish_jobs = session.execute(select(AgentJob).where(AgentJob.kind == "eventbrite_publish")).scalars().all()
+    assert len(publish_jobs) == 1  # The saved publication; lookups added none.
 class DownClient:
     def read_status(self, event_id):
         raise RuntimeError("provider unavailable")

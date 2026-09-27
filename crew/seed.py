@@ -8,21 +8,26 @@ from .db import (AgentJob, AuditEvent, Budget, ControlFlag, ConversationTurn,
                  CrewProject, CrewRun, Office, Payment, PendingOrder,
                  ProjectRunLink, Request, RunResourceLink, Task, Vendor,
                  SessionLocal, init_db)
+from .web_limits import WEB_RUN_COUNTERS, initialize_web_run_counters
 
 
 def seed_demo(*, reset: bool = False) -> None:
     init_db()
     with SessionLocal.begin() as session:
+        # On an upgrade, capture the legacy run total before reset deletes it.
+        # Existing counters are never refreshed from a smaller visible total.
+        initialize_web_run_counters(session)
         if reset:
             for model in (RunResourceLink, ProjectRunLink, ConversationTurn,
                           AgentJob, CrewProject, CrewRun, Payment, PendingOrder,
                           Task, Request, AuditEvent, Budget, Vendor, Office):
                 session.execute(delete(model))
-            # Demo resets must not refresh paid inference, search, or Slack delivery claims.
+            # Demo resets must not refresh paid inference, search, web-run caps,
+            # or Slack delivery claims.
             # Slack may redeliver an old event after a local reset.
             session.execute(delete(ControlFlag).where(
-                ControlFlag.key != "vultr_calls",
-                ControlFlag.key != "brave_searches",
+                ~ControlFlag.key.in_(("vultr_calls", "brave_searches",
+                                      *WEB_RUN_COUNTERS.values())),
                 ~ControlFlag.key.like("slack_delivery_%"),
             ))
         if session.get(Office, "SF") is None:

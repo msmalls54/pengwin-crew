@@ -30,10 +30,15 @@ ENDPOINTS = {
 EMAIL = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 LONG_NUMBER = re.compile(r"(?<!\d)\d{7,}(?!\d)")
 STREET_ADDRESS = re.compile(
-    r"\b\d{1,6}\s+(?:[A-Z0-9.'-]+\s+){1,7}"
+    r"\b\d{1,6}(?:[A-Z]|\s*[-/]\s*[A-Z0-9]{1,3})?\s+"
+    r"(?:[A-Z0-9.'-]+\s+){1,7}"
     r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|"
     r"Way|Court|Ct|Place|Pl|Terrace|Ter|Circle|Cir|Parkway|Pkwy|"
     r"Highway|Hwy|Square|Sq)\b\.?(?!\w)", re.I,
+)
+POST_OFFICE_BOX = re.compile(
+    r"\b(?:P\s*\.?\s*O\s*\.?\s*Box|Post\s+Office\s+Box|Postfach)"
+    r"\s*(?:#|No\.?|Number)?\s*\d{1,8}[A-Z]?\b", re.I,
 )
 STREET_ADDRESS_REVERSED = re.compile(
     r"\b(?:[A-Z0-9.'-]+\s+){1,7}"
@@ -129,7 +134,23 @@ def _reserve_search() -> bool:
 def _contains_private_contact(value: str) -> bool:
     return bool(EMAIL.search(value) or LONG_NUMBER.search(value)
                 or STREET_ADDRESS.search(value) or STREET_ADDRESS_REVERSED.search(value)
-                or GERMAN_STREET_ADDRESS.search(value) or PHONE_NUMBER.search(value))
+                or GERMAN_STREET_ADDRESS.search(value) or POST_OFFICE_BOX.search(value)
+                or PHONE_NUMBER.search(value))
+
+
+def event_venue_queries(venue_name: str) -> tuple[str, str | None, str]:
+    """Use fixed public venue/city terms; never send an arbitrary venue label."""
+    name = " ".join(venue_name.split())
+    if re.fullmatch(r"(?:the\s+)?Salesforce Park(?:,?\s+San Francisco(?:,?\s+CA)?)?", name, re.I):
+        return ("Salesforce Park", "san francisco ca united states",
+                "Salesforce Park official event reservation permit")
+    if re.search(r"\b(?:San Francisco|SF)\b", name, re.I):
+        return ("event venues", "san francisco ca united states",
+                "San Francisco event venue reservation permit guidance")
+    if re.search(r"\bBerlin\b", name, re.I):
+        return ("event venues", "berlin germany",
+                "Berlin event venue reservation permit guidance")
+    return ("event venues", None, "event venue reservation permit guidance")
 
 
 def _extract_leads(data: dict, kind: SearchKind, max_results: int) -> list[SearchLead]:
